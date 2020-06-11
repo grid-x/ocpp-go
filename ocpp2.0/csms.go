@@ -609,6 +609,8 @@ func (cs *csms) handleIncomingRequest(chargingStationID string, request ocpp.Req
 			response, err = cs.iso15118Handler.OnGet15118EVCertificate(chargingStationID, request.(*iso15118.Get15118EVCertificateRequest))
 		case iso15118.GetCertificateStatusFeatureName:
 			response, err = cs.iso15118Handler.OnGetCertificateStatus(chargingStationID, request.(*iso15118.GetCertificateStatusRequest))
+		case availability.HeartbeatFeatureName:
+			response, err = cs.availabilityHandler.OnHeartbeat(chargingStationID, request.(*availability.HeartbeatRequest))
 		default:
 			cs.notSupportedError(chargingStationID, requestId, action)
 			return

@@ -628,6 +628,8 @@ func (cs *csms) handleIncomingRequest(chargingStationID string, request ocpp.Req
 			response, err = cs.availabilityHandler.OnHeartbeat(chargingStationID, request.(*availability.HeartbeatRequest))
 		case diagnostics.LogStatusNotificationFeatureName:
 			response, err = cs.diagnosticsHandler.OnLogStatusNotification(chargingStationID, request.(*diagnostics.LogStatusNotificationRequest))
+		case meter.MeterValuesFeatureName:
+			response, err = cs.meterHandler.OnMeterValues(chargingStationID, request.(*meter.MeterValuesRequest))
 		default:
 			cs.notSupportedError(chargingStationID, requestId, action)
 			return

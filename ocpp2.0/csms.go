@@ -634,6 +634,8 @@ func (cs *csms) handleIncomingRequest(chargingStationID string, request ocpp.Req
 			response, err = cs.smartChargingHandler.OnNotifyChargingLimit(chargingStationID, request.(*smartcharging.NotifyChargingLimitRequest))
 		case diagnostics.NotifyCustomerInformationFeatureName:
 			response, err = cs.diagnosticsHandler.OnNotifyCustomerInformation(chargingStationID, request.(*diagnostics.NotifyCustomerInformationRequest))
+		case display.NotifyDisplayMessagesFeatureName:
+			response, err = cs.displayHandler.OnNotifyDisplayMessages(chargingStationID, request.(*display.NotifyDisplayMessagesRequest))
 		default:
 			cs.notSupportedError(chargingStationID, requestId, action)
 			return

@@ -19,7 +19,8 @@ func newBool(b bool) *bool {
 	return &b
 }
 
-// Test
+// Tests
+
 func (suite *OcppV2TestSuite) TestIdTokenInfoValidation() {
 	var testTable = []GenericTestEntry{
 		{types.IdTokenInfo{Status: types.AuthorizationStatusAccepted, CacheExpiryDateTime: types.NewDateTime(time.Now()), ChargingPriority: 1, Language1: "l1", Language2: "l2", GroupIdToken: &types.GroupIdToken{IdToken: "1234", Type: types.IdTokenTypeCentral}, PersonalMessage: &types.MessageContent{Format: types.MessageFormatUTF8, Language: "en", Content: "random"}}, true},
@@ -44,6 +45,19 @@ func (suite *OcppV2TestSuite) TestIdTokenInfoValidation() {
 		{types.IdTokenInfo{Status: types.AuthorizationStatusAccepted, CacheExpiryDateTime: types.NewDateTime(time.Now()), ChargingPriority: -10}, false},
 		{types.IdTokenInfo{Status: types.AuthorizationStatusAccepted, CacheExpiryDateTime: types.NewDateTime(time.Now()), ChargingPriority: 10}, false},
 		{types.IdTokenInfo{Status: "invalidAuthStatus"}, false},
+	}
+	ExecuteGenericTestTable(suite.T(), testTable)
+}
+
+func (suite *OcppV2TestSuite) TestStatusInfo() {
+	var testTable = []GenericTestEntry{
+		{types.StatusInfo{ReasonCode: "code0", AdditionalInfo: "someInfo"}, true},
+		{types.StatusInfo{ReasonCode: "code0", AdditionalInfo: ""}, true},
+		{types.StatusInfo{ReasonCode: "code0"}, true},
+		{types.StatusInfo{ReasonCode: ""}, false},
+		{types.StatusInfo{}, false},
+		{types.StatusInfo{ReasonCode: ">20.................."}, false},
+		{types.StatusInfo{ReasonCode: "code0", AdditionalInfo: ">512............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................."}, false},
 	}
 	ExecuteGenericTestTable(suite.T(), testTable)
 }

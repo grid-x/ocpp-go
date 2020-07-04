@@ -115,6 +115,12 @@ func isValidGenericStatus(fl validator.FieldLevel) bool {
 	}
 }
 
+// StatusInfo provides more information about the status within a response.
+type StatusInfo struct {
+	ReasonCode     string `json:"reasonCode" validate:"required,max=20"`                 // A predefined code for the reason why the status is returned in this response. The string is case- insensitive.
+	AdditionalInfo string `json:"additionalInfo,omitempty" validate:"omitempty,max=512"` // Additional text to provide detailed information.
+}
+
 // Hash Algorithms
 type HashAlgorithmType string
 

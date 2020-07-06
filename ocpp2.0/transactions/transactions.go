@@ -18,4 +18,4 @@ const ProfileName = "transactions"
 var Profile = ocpp.NewProfile(
 	ProfileName,
 	GetTransactionStatusFeature{},
-	)
+)

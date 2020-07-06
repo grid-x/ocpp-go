@@ -18,4 +18,4 @@ const ProfileName = "meter"
 var Profile = ocpp.NewProfile(
 	ProfileName,
 	MeterValuesFeature{},
-	)
+)

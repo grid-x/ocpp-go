@@ -23,7 +23,6 @@ func (suite *OcppV2TestSuite) TestACChargingParametersValidation() {
 	ExecuteGenericTestTable(suite.T(), testTable)
 }
 
-
 func (suite *OcppV2TestSuite) TestDCChargingParametersValidation() {
 	var testTable = []GenericTestEntry{
 		{smartcharging.DCChargingParameters{EvMaxCurrent: 42, EvMaxVoltage: 240, EnergyAmount: newInt(10), EvMaxPower: newInt(42), StateOfCharge: newInt(46), EvEnergyCapacity: newInt(98), FullSoC: newInt(100), BulkSoC: newInt(42)}, true},
@@ -102,9 +101,9 @@ func (suite *OcppV2TestSuite) TestNotifyEVChargingNeedsE2EMocked() {
 	maxScheduleTuples := newInt(2)
 	evseID := 1
 	dcChargingParameters := smartcharging.DCChargingParameters{
-		EvMaxCurrent:     42,
-		EvMaxVoltage:     240,
-		StateOfCharge:    newInt(46),
+		EvMaxCurrent:  42,
+		EvMaxVoltage:  240,
+		StateOfCharge: newInt(46),
 	}
 	chargingNeeds := smartcharging.ChargingNeeds{RequestedEnergyTransfer: smartcharging.EnergyTransferModeDC, DepartureTime: types.NewDateTime(time.Now()), DCChargingParameters: &dcChargingParameters}
 	status := smartcharging.NotifyEVChargingNeedsStatusAccepted
@@ -158,9 +157,9 @@ func (suite *OcppV2TestSuite) TestNotifyEVChargingNeedsInvalidEndpoint() {
 	maxScheduleTuples := newInt(2)
 	evseID := 1
 	dcChargingParameters := smartcharging.DCChargingParameters{
-		EvMaxCurrent:     42,
-		EvMaxVoltage:     240,
-		StateOfCharge:    newInt(46),
+		EvMaxCurrent:  42,
+		EvMaxVoltage:  240,
+		StateOfCharge: newInt(46),
 	}
 	chargingNeeds := smartcharging.ChargingNeeds{RequestedEnergyTransfer: smartcharging.EnergyTransferModeDC, DepartureTime: types.NewDateTime(time.Now()), DCChargingParameters: &dcChargingParameters}
 	requestJson := fmt.Sprintf(`[2,"%v","%v",{"maxScheduleTuples":%v,"evseId":%v,"chargingNeeds":{"requestedEnergyTransfer":"%v","departureTime":"%v","dcChargingParameters":{"evMaxCurrent":%v,"evMaxVoltage":%v,"stateOfCharge":%v}}}]`,

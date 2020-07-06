@@ -16,8 +16,8 @@ type GetTransactionStatusRequest struct {
 // This field definition of the GetTransactionStatus response payload, sent by the Charging Station to the CSMS in response to a GetTransactionStatusRequest.
 // In case the request was invalid, or couldn't be processed, an error will be sent instead.
 type GetTransactionStatusResponse struct {
-	OngoingIndicator *bool                      `json:"ongoingIndicator,omitempty" validate:"omitempty"`
-	MessageInQueue   bool                       `json:"messageInQueue"`
+	OngoingIndicator *bool `json:"ongoingIndicator,omitempty" validate:"omitempty"`
+	MessageInQueue   bool  `json:"messageInQueue"`
 }
 
 // In some scenarios a CSMS needs to know whether there are still messages for a transaction that need to be delivered.

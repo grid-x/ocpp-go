@@ -164,7 +164,7 @@ func (cs *chargingStation) LogStatusNotification(status diagnostics.UploadLogSta
 }
 
 func (cs *chargingStation) MeterValues(evseID int, meterValues []types.MeterValue, props ...func(request *meter.MeterValuesRequest)) (*meter.MeterValuesResponse, error) {
-	request := meter.NewMeterValuesRequest (evseID, meterValues)
+	request := meter.NewMeterValuesRequest(evseID, meterValues)
 	for _, fn := range props {
 		fn(request)
 	}

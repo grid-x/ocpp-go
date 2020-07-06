@@ -21,7 +21,7 @@ func (suite *OcppV2TestSuite) TestNotifyDisplayMessagesRequestValidation() {
 		{display.NotifyDisplayMessagesRequest{RequestID: 42}, true},
 		{display.NotifyDisplayMessagesRequest{}, true},
 		{display.NotifyDisplayMessagesRequest{RequestID: -1}, false},
-		{display.NotifyDisplayMessagesRequest{RequestID: 42, MessageInfo: []display.MessageInfo{ {ID: 42, Priority: "invalidPriority", State: display.MessageStateIdle, Message: types.MessageContent{Format: types.MessageFormatUTF8, Content: "hello world"}} }}, false},
+		{display.NotifyDisplayMessagesRequest{RequestID: 42, MessageInfo: []display.MessageInfo{{ID: 42, Priority: "invalidPriority", State: display.MessageStateIdle, Message: types.MessageContent{Format: types.MessageFormatUTF8, Content: "hello world"}}}}, false},
 	}
 	ExecuteGenericTestTable(t, requestTable)
 }
@@ -70,7 +70,7 @@ func (suite *OcppV2TestSuite) TestNotifyDisplayMessagesE2EMocked() {
 	err := suite.chargingStation.Start(wsUrl)
 	require.Nil(t, err)
 	r, err := suite.chargingStation.NotifyDisplayMessages(requestID, func(request *display.NotifyDisplayMessagesRequest) {
-		request.MessageInfo = []display.MessageInfo{ messageInfo }
+		request.MessageInfo = []display.MessageInfo{messageInfo}
 	})
 	assert.Nil(t, err)
 	assert.NotNil(t, r)

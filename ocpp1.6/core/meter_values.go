@@ -5,7 +5,7 @@ import (
 	"reflect"
 )
 
-// -------------------- Heartbeat (CP -> CS) --------------------
+// -------------------- Meter Values (CP -> CS) --------------------
 
 const MeterValuesFeatureName = "MeterValues"
 

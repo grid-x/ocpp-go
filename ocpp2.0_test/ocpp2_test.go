@@ -634,9 +634,9 @@ type expectedChargingStationOptions struct {
 	forwardWrittenMessage bool
 }
 
-func setupDefaultCSMSHandlers(suite *OcppV2TestSuite, options expectedCSMSOptions, handlers... interface{}) {
+func setupDefaultCSMSHandlers(suite *OcppV2TestSuite, options expectedCSMSOptions, handlers ...interface{}) {
 	t := suite.T()
-	for _,h := range handlers {
+	for _, h := range handlers {
 		switch h.(type) {
 		case MockCSMSAuthorizationHandler:
 			suite.csms.SetAuthorizationHandler(h.(MockCSMSAuthorizationHandler))
@@ -693,7 +693,7 @@ func setupDefaultCSMSHandlers(suite *OcppV2TestSuite, options expectedCSMSOption
 	})
 }
 
-func setupDefaultChargingStationHandlers(suite *OcppV2TestSuite, options expectedChargingStationOptions, handlers... interface{}) {
+func setupDefaultChargingStationHandlers(suite *OcppV2TestSuite, options expectedChargingStationOptions, handlers ...interface{}) {
 	t := suite.T()
 	for _, h := range handlers {
 		switch h.(type) {
@@ -758,7 +758,7 @@ func assertDateTimeEquality(t *testing.T, expected *types.DateTime, actual *type
 	assert.Equal(t, expected.FormatTimestamp(), actual.FormatTimestamp())
 }
 
-func testUnsupportedRequestFromChargingStation(suite *OcppV2TestSuite, request ocpp.Request, requestJson string, messageId string, handlers... interface{}) {
+func testUnsupportedRequestFromChargingStation(suite *OcppV2TestSuite, request ocpp.Request, requestJson string, messageId string, handlers ...interface{}) {
 	t := suite.T()
 	wsId := "test_id"
 	wsUrl := "someUrl"
@@ -795,7 +795,7 @@ func testUnsupportedRequestFromChargingStation(suite *OcppV2TestSuite, request o
 	assert.True(t, result)
 }
 
-func testUnsupportedRequestFromCentralSystem(suite *OcppV2TestSuite, request ocpp.Request, requestJson string, messageId string, handlers... interface{}) {
+func testUnsupportedRequestFromCentralSystem(suite *OcppV2TestSuite, request ocpp.Request, requestJson string, messageId string, handlers ...interface{}) {
 	t := suite.T()
 	wsId := "test_id"
 	wsUrl := "someUrl"

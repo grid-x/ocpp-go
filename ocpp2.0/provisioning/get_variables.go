@@ -47,13 +47,13 @@ type VariableResult struct {
 
 // The field definition of the GetVariables request payload sent by the CSMS to the Charging Station.
 type GetVariablesRequest struct {
-	GetVariableData   []VariableData            `json:"getVariableData" validate:"required,min=1,dive"`
+	GetVariableData []VariableData `json:"getVariableData" validate:"required,min=1,dive"`
 }
 
 // This field definition of the GetVariables response payload, sent by the Charging Station to the CSMS in response to a GetVariablesRequest.
 // In case the request was invalid, or couldn't be processed, an error will be sent instead.
 type GetVariablesResponse struct {
-	GetVariableResult []VariableResult               `json:"getVariableResult" validate:"required,min=1,dive"`
+	GetVariableResult []VariableResult `json:"getVariableResult" validate:"required,min=1,dive"`
 }
 
 // The CSO may trigger the CSMS to request to request for a number of variables in a Charging Station.

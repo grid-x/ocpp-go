@@ -13,12 +13,12 @@ import (
 // Test
 func (suite *OcppV2TestSuite) TestMeterValuesRequestValidation() {
 	var requestTable = []GenericTestEntry{
-		{meter.MeterValuesRequest{EvseID: 1, MeterValue: []types.MeterValue{ {Timestamp: types.DateTime{Time: time.Now()}, SampledValue: []types.SampledValue{ {Value: 3.14, Context: types.ReadingContextTransactionEnd, Measurand: types.MeasurandPowerActiveExport, Phase: types.PhaseL2, Location: types.LocationBody}}} }}, true},
-		{meter.MeterValuesRequest{MeterValue: []types.MeterValue{ {Timestamp: types.DateTime{Time: time.Now()}, SampledValue: []types.SampledValue{ {Value: 3.14, Context: types.ReadingContextTransactionEnd, Measurand: types.MeasurandPowerActiveExport, Phase: types.PhaseL2, Location: types.LocationBody}}} }}, true},
+		{meter.MeterValuesRequest{EvseID: 1, MeterValue: []types.MeterValue{{Timestamp: types.DateTime{Time: time.Now()}, SampledValue: []types.SampledValue{{Value: 3.14, Context: types.ReadingContextTransactionEnd, Measurand: types.MeasurandPowerActiveExport, Phase: types.PhaseL2, Location: types.LocationBody}}}}}, true},
+		{meter.MeterValuesRequest{MeterValue: []types.MeterValue{{Timestamp: types.DateTime{Time: time.Now()}, SampledValue: []types.SampledValue{{Value: 3.14, Context: types.ReadingContextTransactionEnd, Measurand: types.MeasurandPowerActiveExport, Phase: types.PhaseL2, Location: types.LocationBody}}}}}, true},
 		{meter.MeterValuesRequest{EvseID: 1, MeterValue: []types.MeterValue{}}, false},
 		{meter.MeterValuesRequest{EvseID: 1}, false},
-		{meter.MeterValuesRequest{EvseID: 1, MeterValue: []types.MeterValue{ {Timestamp: types.DateTime{Time: time.Now()}, SampledValue: []types.SampledValue{ {Value: 3.14, Context: "invalidContext", Measurand: types.MeasurandPowerActiveExport, Phase: types.PhaseL2, Location: types.LocationBody}}} }}, false},
-		{meter.MeterValuesRequest{EvseID: -1, MeterValue: []types.MeterValue{ {Timestamp: types.DateTime{Time: time.Now()}, SampledValue: []types.SampledValue{ {Value: 3.14, Context: types.ReadingContextTransactionEnd, Measurand: types.MeasurandPowerActiveExport, Phase: types.PhaseL2, Location: types.LocationBody}}} }}, false},
+		{meter.MeterValuesRequest{EvseID: 1, MeterValue: []types.MeterValue{{Timestamp: types.DateTime{Time: time.Now()}, SampledValue: []types.SampledValue{{Value: 3.14, Context: "invalidContext", Measurand: types.MeasurandPowerActiveExport, Phase: types.PhaseL2, Location: types.LocationBody}}}}}, false},
+		{meter.MeterValuesRequest{EvseID: -1, MeterValue: []types.MeterValue{{Timestamp: types.DateTime{Time: time.Now()}, SampledValue: []types.SampledValue{{Value: 3.14, Context: types.ReadingContextTransactionEnd, Measurand: types.MeasurandPowerActiveExport, Phase: types.PhaseL2, Location: types.LocationBody}}}}}, false},
 	}
 	ExecuteGenericTestTable(suite.T(), requestTable)
 }

@@ -18,7 +18,7 @@ func (suite *OcppV2TestSuite) TestNotifyChargingLimitRequestValidation() {
 		Duration:               newInt(600),
 		ChargingRateUnit:       types.ChargingRateUnitWatts,
 		MinChargingRate:        newFloat(6.0),
-		ChargingSchedulePeriod: []types.ChargingSchedulePeriod{ types.NewChargingSchedulePeriod(0, 10.0) },
+		ChargingSchedulePeriod: []types.ChargingSchedulePeriod{types.NewChargingSchedulePeriod(0, 10.0)},
 	}
 	var requestTable = []GenericTestEntry{
 		{smartcharging.NotifyChargingLimitRequest{EvseID: newInt(1), ChargingLimit: smartcharging.ChargingLimit{ChargingLimitSource: types.ChargingLimitSourceEMS, IsGridCritical: newBool(false)}, ChargingSchedule: []types.ChargingSchedule{chargingSchedule}}, true},
@@ -30,7 +30,7 @@ func (suite *OcppV2TestSuite) TestNotifyChargingLimitRequestValidation() {
 		{smartcharging.NotifyChargingLimitRequest{}, false},
 		{smartcharging.NotifyChargingLimitRequest{ChargingLimit: smartcharging.ChargingLimit{ChargingLimitSource: "invalidChargingLimitSource", IsGridCritical: newBool(false)}}, false},
 		{smartcharging.NotifyChargingLimitRequest{EvseID: newInt(-1), ChargingLimit: smartcharging.ChargingLimit{ChargingLimitSource: types.ChargingLimitSourceEMS, IsGridCritical: newBool(false)}}, false},
-		{smartcharging.NotifyChargingLimitRequest{ChargingLimit: smartcharging.ChargingLimit{ChargingLimitSource: types.ChargingLimitSourceEMS, IsGridCritical: newBool(false)}, ChargingSchedule: []types.ChargingSchedule{ {ChargingRateUnit: "invalidStruct"} }}, false},
+		{smartcharging.NotifyChargingLimitRequest{ChargingLimit: smartcharging.ChargingLimit{ChargingLimitSource: types.ChargingLimitSourceEMS, IsGridCritical: newBool(false)}, ChargingSchedule: []types.ChargingSchedule{{ChargingRateUnit: "invalidStruct"}}}, false},
 	}
 	ExecuteGenericTestTable(t, requestTable)
 }
@@ -55,7 +55,7 @@ func (suite *OcppV2TestSuite) TestNotifyChargingLimitE2EMocked() {
 		Duration:               newInt(600),
 		ChargingRateUnit:       types.ChargingRateUnitWatts,
 		MinChargingRate:        newFloat(6.0),
-		ChargingSchedulePeriod: []types.ChargingSchedulePeriod{ types.NewChargingSchedulePeriod(0, 10.0) },
+		ChargingSchedulePeriod: []types.ChargingSchedulePeriod{types.NewChargingSchedulePeriod(0, 10.0)},
 	}
 	chargingSchedules := []types.ChargingSchedule{chargingSchedule}
 	requestJson := fmt.Sprintf(`[2,"%v","%v",{"evseId":%v,"chargingLimit":{"chargingLimitSource":"%v","isGridCritical":%v},"chargingSchedule":[{"startSchedule":"%v","duration":%v,"chargingRateUnit":"%v","minChargingRate":%v,"chargingSchedulePeriod":[{"startPeriod":%v,"limit":%v}]}]}]`,
@@ -105,7 +105,7 @@ func (suite *OcppV2TestSuite) TestNotifyChargingLimitInvalidEndpoint() {
 		Duration:               newInt(600),
 		ChargingRateUnit:       types.ChargingRateUnitWatts,
 		MinChargingRate:        newFloat(6.0),
-		ChargingSchedulePeriod: []types.ChargingSchedulePeriod{ types.NewChargingSchedulePeriod(0, 10.0) },
+		ChargingSchedulePeriod: []types.ChargingSchedulePeriod{types.NewChargingSchedulePeriod(0, 10.0)},
 	}
 	chargingSchedules := []types.ChargingSchedule{chargingSchedule}
 	request := smartcharging.NewNotifyChargingLimitRequest(chargingLimit)

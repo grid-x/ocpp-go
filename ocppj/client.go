@@ -78,6 +78,14 @@ func (c *Client) SetOnRequestCanceled(handler func(requestId string, request ocp
 	c.dispatcher.SetOnRequestCanceled(handler)
 }
 
+func (c *Client) SetOnDisconnectedHandler(handler func(err error)) {
+	c.onDisconnectedHandler = handler
+}
+
+func (c *Client) SetOnReconnectedHandler(handler func()) {
+	c.onReconnectedHandler = handler
+}
+
 // Connects to the given serverURL and starts running the I/O loop for the underlying connection.
 //
 // If the connection is established successfully, the function returns control to the caller immediately.
@@ -257,4 +265,7 @@ func (c *Client) onReconnected() {
 		c.onReconnectedHandler()
 	}
 	c.dispatcher.Resume()
+	if c.onReconnectedHandler != nil {
+		c.onReconnectedHandler()
+	}
 }

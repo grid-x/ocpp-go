@@ -129,6 +129,7 @@ type WebSocket struct {
 	closeSignal        chan error // used by the readPump to notify the closed connection to the writePump
 	pingMessage        chan []byte
 	tlsConnectionState *tls.ConnectionState
+	closed             chan struct{}
 }
 
 // Retrieves the unique Identifier of the websocket (typically, the URL suffix).
@@ -474,8 +475,40 @@ func (server *Server) wsHandler(w http.ResponseWriter, r *http.Request) {
 		closeSignal:        make(chan error, 1),
 		pingMessage:        make(chan []byte, 1),
 		tlsConnectionState: r.TLS,
+		closed:             make(chan struct{}),
 	}
 	server.connMutex.Lock()
+	// If we already have an ID, give the existing connection time to disconnect
+	if existingConn, idExists := server.connections[ws.id]; idExists {
+		closed := existingConn.closed
+		server.connMutex.Unlock()
+		select {
+		// The existing connection was closed
+		case <-closed:
+			server.connMutex.Lock()
+			// Another connection might have gotten the Lock and added the
+			// connection. If so, close this connection.
+			if _, idExists := server.connections[ws.id]; idExists {
+				server.connMutex.Unlock()
+				conn.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, ""),
+					time.Now().Add(server.timeoutConfig.WriteWait),
+				)
+				conn.Close()
+				return
+			}
+		// The existing connection wasn't closed before a timeout
+		case <-time.After(1 * time.Second):
+			conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.ClosePolicyViolation, ""),
+				time.Now().Add(server.timeoutConfig.WriteWait),
+			)
+			conn.Close()
+			return
+		}
+	}
 	server.connections[ws.id] = &ws
 	server.connMutex.Unlock()
 	// Read and write routines are started in separate goroutines and function will return immediately
@@ -530,6 +563,10 @@ func (server *Server) writePump(ws *WebSocket) {
 		_ = conn.Close()
 		server.connMutex.Lock()
 		defer server.connMutex.Unlock()
+		conn, ok := server.connections[ws.id]
+		if ok {
+			close(conn.closed)
+		}
 		delete(server.connections, ws.id)
 	}()
 

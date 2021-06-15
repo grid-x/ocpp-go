@@ -370,6 +370,7 @@ func (server *Server) Start(port int, listenPath string) {
 
 	defer ln.Close()
 
+	server.httpServer.RegisterOnShutdown(server.stopConnections)
 	if server.tlsCertificatePath != "" && server.tlsCertificateKey != "" {
 		err = server.httpServer.ServeTLS(ln, server.tlsCertificatePath, server.tlsCertificateKey)
 	} else {
@@ -378,6 +379,25 @@ func (server *Server) Start(port int, listenPath string) {
 
 	if err != http.ErrServerClosed {
 		server.error(fmt.Errorf("failed to listen: %w", err))
+	}
+}
+
+func (server *Server) stopConnections() {
+	for _, conn := range server.connections {
+		conn := conn
+		go func() {
+			if err := conn.connection.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, ""),
+				time.Now().Add(server.timeoutConfig.WriteWait),
+			); err != nil {
+				server.error(fmt.Errorf("failed to write close message for connection %s", conn.id))
+			}
+			if err := conn.connection.Close(); err != nil {
+				server.error(fmt.Errorf("failed to close connection %s", conn.id))
+			}
+			server.disconnectedHandler(conn)
+		}()
 	}
 }
 

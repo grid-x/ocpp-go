@@ -53,6 +53,9 @@ func newWebsocketServer(t *testing.T, onMessage func(data []byte) ([]byte, error
 
 func newWebsocketClient(t *testing.T, onMessage func(data []byte) ([]byte, error)) *Client {
 	wsClient := NewClient()
+	wsClient.AddOption(func(dialer *websocket.Dialer) {
+		dialer.Subprotocols = append(dialer.Subprotocols, defaultSubProtocol)
+	})
 	wsClient.SetMessageHandler(func(data []byte) error {
 		assert.NotNil(t, data)
 		if onMessage != nil {
@@ -236,6 +239,151 @@ func TestServerStartErrors(t *testing.T) {
 	wsServer.Stop()
 }
 
+func TestClientDuplicateConnection(t *testing.T) {
+	wsServer := newWebsocketServer(t, nil)
+	wsServer.SetNewClientHandler(func(ws Channel) {
+	})
+	// Start server
+	go wsServer.Start(serverPort, serverPath)
+	time.Sleep(100 * time.Millisecond)
+	// Connect client 1
+	wsClient1 := newWebsocketClient(t, func(data []byte) ([]byte, error) {
+		return nil, nil
+	})
+	host := fmt.Sprintf("localhost:%v", serverPort)
+	u := url.URL{Scheme: "ws", Host: host, Path: testPath}
+	err := wsClient1.Start(u.String())
+	require.NoError(t, err)
+	// Try to connect client 2
+	disconnectC := make(chan struct{})
+	wsClient2 := newWebsocketClient(t, func(data []byte) ([]byte, error) {
+		return nil, nil
+	})
+	wsClient2.SetDisconnectedHandler(func(err error) {
+		require.IsType(t, &websocket.CloseError{}, err)
+		wsErr, _ := err.(*websocket.CloseError)
+		assert.Equal(t, websocket.ClosePolicyViolation, wsErr.Code)
+		assert.Equal(t, "a connection with this ID already exists", wsErr.Text)
+		wsClient2.SetDisconnectedHandler(nil)
+		disconnectC <- struct{}{}
+	})
+	err = wsClient2.Start(u.String())
+	require.NoError(t, err)
+	// Expect connection to be closed immediately
+	_, ok := <-disconnectC
+	assert.True(t, ok)
+	// Cleanup
+	wsClient1.Stop()
+	wsServer.Stop()
+}
+
+func TestServerStopConnection(t *testing.T) {
+	triggerC := make(chan struct{}, 1)
+	disconnectedClientC := make(chan struct{}, 1)
+	disconnectedServerC := make(chan struct{}, 1)
+	closeError := websocket.CloseError{
+		Code: websocket.CloseGoingAway,
+		Text: "CloseClientConnection",
+	}
+	wsServer := newWebsocketServer(t, nil)
+	wsServer.SetNewClientHandler(func(ws Channel) {
+		triggerC <- struct{}{}
+	})
+	wsServer.SetDisconnectedClientHandler(func(ws Channel) {
+		disconnectedServerC <- struct{}{}
+	})
+	wsClient := newWebsocketClient(t, func(data []byte) ([]byte, error) {
+		return nil, nil
+	})
+	wsClient.SetDisconnectedHandler(func(err error) {
+		require.IsType(t, &closeError, err)
+		closeErr, _ := err.(*websocket.CloseError)
+		assert.Equal(t, closeError.Code, closeErr.Code)
+		assert.Equal(t, closeError.Text, closeErr.Text)
+		disconnectedClientC <- struct{}{}
+	})
+	// Start server
+	go wsServer.Start(serverPort, serverPath)
+	time.Sleep(100 * time.Millisecond)
+	// Connect client
+	host := fmt.Sprintf("localhost:%v", serverPort)
+	u := url.URL{Scheme: "ws", Host: host, Path: testPath}
+	err := wsClient.Start(u.String())
+	require.NoError(t, err)
+	// Wait for client to connect
+	_, ok := <-triggerC
+	require.True(t, ok)
+	// Close connection and wait for client to be closed
+	err = wsServer.StopConnection(path.Base(testPath), closeError)
+	require.NoError(t, err)
+	_, ok = <-disconnectedClientC
+	require.True(t, ok)
+	_, ok = <-disconnectedServerC
+	require.True(t, ok)
+	assert.False(t, wsClient.IsConnected())
+	time.Sleep(100 * time.Millisecond)
+	assert.Empty(t, wsServer.connections)
+	// Client will attempt to reconnect under the hood, but test finishes before this can happen
+	// Cleanup
+	wsClient.Stop()
+	wsServer.Stop()
+}
+
+func TestWebsocketServerStopAllConnections(t *testing.T) {
+	triggerC := make(chan struct{}, 1)
+	numClients := 5
+	disconnectedClientC := make(chan struct{}, numClients)
+	disconnectedServerC := make(chan struct{}, 1)
+	wsServer := newWebsocketServer(t, nil)
+	wsServer.SetNewClientHandler(func(ws Channel) {
+		triggerC <- struct{}{}
+	})
+	wsServer.SetDisconnectedClientHandler(func(ws Channel) {
+		disconnectedServerC <- struct{}{}
+	})
+	// Start server
+	go wsServer.Start(serverPort, serverPath)
+	time.Sleep(100 * time.Millisecond)
+	// Connect clients
+	clients := []WsClient{}
+	host := fmt.Sprintf("localhost:%v", serverPort)
+	for i := 0; i < numClients; i++ {
+		wsClient := newWebsocketClient(t, func(data []byte) ([]byte, error) {
+			return nil, nil
+		})
+		wsClient.SetDisconnectedHandler(func(err error) {
+			require.IsType(t, &websocket.CloseError{}, err)
+			closeErr, _ := err.(*websocket.CloseError)
+			assert.Equal(t, websocket.CloseNormalClosure, closeErr.Code)
+			assert.Equal(t, "", closeErr.Text)
+			disconnectedClientC <- struct{}{}
+		})
+		u := url.URL{Scheme: "ws", Host: host, Path: fmt.Sprintf("%v-%v", testPath, i)}
+		err := wsClient.Start(u.String())
+		require.NoError(t, err)
+		clients = append(clients, wsClient)
+		// Wait for client to connect
+		_, ok := <-triggerC
+		require.True(t, ok)
+	}
+	// Stop server and wait for clients to disconnect
+	wsServer.Stop()
+	for disconnects := 0; disconnects < numClients; disconnects++ {
+		_, ok := <-disconnectedClientC
+		require.True(t, ok)
+		_, ok = <-disconnectedServerC
+		require.True(t, ok)
+	}
+	// Check disconnection status
+	for _, c := range clients {
+		assert.False(t, c.IsConnected())
+		// Client will attempt to reconnect under the hood, but test finishes before this can happen
+		c.Stop()
+	}
+	time.Sleep(100 * time.Millisecond)
+	assert.Empty(t, wsServer.connections)
+}
+
 func TestWebsocketClientConnectionBreak(t *testing.T) {
 	newClient := make(chan bool)
 	disconnected := make(chan bool)
@@ -334,6 +482,9 @@ func TestValidBasicAuth(t *testing.T) {
 	require.True(t, ok)
 	wsClient := NewTLSClient(&tls.Config{
 		RootCAs: certPool,
+	})
+	wsClient.AddOption(func(dialer *websocket.Dialer) {
+		dialer.Subprotocols = append(dialer.Subprotocols, defaultSubProtocol)
 	})
 	// Add basic auth
 	wsClient.SetBasicAuth(authUsername, authPassword)
@@ -532,6 +683,9 @@ func TestValidClientTLSCertificate(t *testing.T) {
 		RootCAs:      certPool,
 		Certificates: []tls.Certificate{loadedCert},
 	})
+	wsClient.AddOption(func(dialer *websocket.Dialer) {
+		dialer.Subprotocols = append(dialer.Subprotocols, defaultSubProtocol)
+	})
 	// Test connection
 	host := fmt.Sprintf("localhost:%v", serverPort)
 	u := url.URL{Scheme: "wss", Host: host, Path: testPath}
@@ -589,6 +743,9 @@ func TestInvalidClientTLSCertificate(t *testing.T) {
 		RootCAs:      certPool,                      // Contains server certificate as allowed server CA
 		Certificates: []tls.Certificate{loadedCert}, // Contains self-signed client certificate. Will be rejected by server
 	})
+	wsClient.AddOption(func(dialer *websocket.Dialer) {
+		dialer.Subprotocols = append(dialer.Subprotocols, defaultSubProtocol)
+	})
 	// Test connection
 	host := fmt.Sprintf("localhost:%v", serverPort)
 	u := url.URL{Scheme: "wss", Host: host, Path: testPath}
@@ -620,7 +777,17 @@ func TestUnsupportedSubprotocol(t *testing.T) {
 	go wsServer.Start(serverPort, serverPath)
 	time.Sleep(1 * time.Second)
 
+	// Setup client
+	disconnectC := make(chan struct{})
 	wsClient := newWebsocketClient(t, nil)
+	wsClient.SetDisconnectedHandler(func(err error) {
+		require.IsType(t, &websocket.CloseError{}, err)
+		wsErr, _ := err.(*websocket.CloseError)
+		assert.Equal(t, websocket.CloseProtocolError, wsErr.Code)
+		assert.Equal(t, "invalid or unsupported subprotocol", wsErr.Text)
+		wsClient.SetDisconnectedHandler(nil)
+		disconnectC <- struct{}{}
+	})
 	// Set invalid subprotocol
 	wsClient.AddOption(func(dialer *websocket.Dialer) {
 		dialer.Subprotocols = []string{"unsupportedSubProto"}
@@ -629,7 +796,10 @@ func TestUnsupportedSubprotocol(t *testing.T) {
 	host := fmt.Sprintf("localhost:%v", serverPort)
 	u := url.URL{Scheme: "ws", Host: host, Path: testPath}
 	err := wsClient.Start(u.String())
-	assert.NotNil(t, err)
+	assert.NoError(t, err)
+	// Expect connection to be closed directly after start
+	_, ok := <-disconnectC
+	assert.True(t, ok)
 	// Cleanup
 	wsServer.Stop()
 }

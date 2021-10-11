@@ -2,11 +2,13 @@ package ocpp16_test
 
 import (
 	"fmt"
-	"github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
-	"github.com/lorenzodonini/ocpp-go/ocpp1.6/remotetrigger"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
+	"github.com/lorenzodonini/ocpp-go/ocpp1.6/remotetrigger"
 )
 
 // Test
@@ -16,7 +18,8 @@ func (suite *OcppV16TestSuite) TestTriggerMessageRequestValidation() {
 		{remotetrigger.TriggerMessageRequest{RequestedMessage: core.StatusNotificationFeatureName, ConnectorId: newInt(1)}, true},
 		{remotetrigger.TriggerMessageRequest{RequestedMessage: core.StatusNotificationFeatureName}, true},
 		{remotetrigger.TriggerMessageRequest{}, false},
-		{remotetrigger.TriggerMessageRequest{RequestedMessage: core.StatusNotificationFeatureName, ConnectorId: newInt(0)}, false},
+		{remotetrigger.TriggerMessageRequest{RequestedMessage: core.StatusNotificationFeatureName, ConnectorId: newInt(0)}, true},
+		{remotetrigger.TriggerMessageRequest{RequestedMessage: core.StatusNotificationFeatureName, ConnectorId: newInt(-1)}, false},
 		{remotetrigger.TriggerMessageRequest{RequestedMessage: core.StartTransactionFeatureName}, false},
 	}
 	ExecuteGenericTestTable(t, requestTable)

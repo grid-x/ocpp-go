@@ -57,12 +57,13 @@ const (
 	IdTokenTypeLocal           IdTokenType = "Local"
 	IdTokenTypeNoAuthorization IdTokenType = "NoAuthorization"
 	IdTokenTypeISO15693        IdTokenType = "ISO15693"
+	IdTokenTypeMacAddress      IdTokenType = "MacAddress"
 )
 
 func isValidIdTokenType(fl validator.FieldLevel) bool {
 	tokenType := IdTokenType(fl.Field().String())
 	switch tokenType {
-	case IdTokenTypeCentral, IdTokenTypeEMAID, IdTokenTypeISO14443, IdTokenTypeKeyCode, IdTokenTypeLocal, IdTokenTypeNoAuthorization, IdTokenTypeISO15693:
+	case IdTokenTypeCentral, IdTokenTypeEMAID, IdTokenTypeISO14443, IdTokenTypeKeyCode, IdTokenTypeLocal, IdTokenTypeNoAuthorization, IdTokenTypeISO15693, IdTokenTypeMacAddress:
 		return true
 	default:
 		return false
@@ -75,7 +76,7 @@ type AdditionalInfo struct {
 }
 
 type IdToken struct {
-	IdToken        string           `json:"idToken" validate:"required,max=36"`
+	IdToken        string           `json:"idToken" validate:"omitempty,max=36"` // Note: This is required for 2.0.1 but not for BDL
 	Type           IdTokenType      `json:"type" validate:"required,idTokenType"`
 	AdditionalInfo []AdditionalInfo `json:"additionalInfo,omitempty" validate:"omitempty,dive"`
 }
@@ -556,6 +557,9 @@ const (
 	MeasurandEnergyApparentNet            Measurand      = "Energy.Apparent.Net"
 	MeasurandEnergyApparentImport         Measurand      = "Energy.Apparent.Import"
 	MeasurandEnergyApparentExport         Measurand      = "Energy.Apparent.Export"
+	MeasurandEnergyRequestMaximum         Measurand      = "Energy.Request.Maximum"
+	MeasurandEnergyRequestTarget          Measurand      = "Energy.Request.Target"
+	MeasurandEnergyRequestMinimum         Measurand      = "Energy.Request.Minimum"
 	MeasurandFrequency                    Measurand      = "Frequency"
 	MeasurandPowerActiveExport            Measurand      = "Power.Active.Export"
 	MeasurandPowerActiveImport            Measurand      = "Power.Active.Import"
@@ -563,6 +567,11 @@ const (
 	MeasurandPowerOffered                 Measurand      = "Power.Offered"
 	MeasurandPowerReactiveExport          Measurand      = "Power.Reactive.Export"
 	MeasurandPowerReactiveImport          Measurand      = "Power.Reactive.Import"
+	MeasurandPowerImportOffered           Measurand      = "Power.Import.Offered"
+	MeasurandPowerExportOffered           Measurand      = "Power.Export.Offered"
+	MeasurandPowerImportMinimum           Measurand      = "Power.Import.Minimum"
+	MeasurandPowerExportMinimum           Measurand      = "Power.Export.Minimum"
+	MeasurandPowerActiveSetpoint          Measurand      = "Power.Active.Setpoint"
 	MeasueandSoC                          Measurand      = "SoC"
 	MeasurandTemperature                  Measurand      = "Temperature"
 	MeasurandVoltage                      Measurand      = "Voltage"
@@ -596,7 +605,7 @@ func isValidReadingContext(fl validator.FieldLevel) bool {
 func isValidMeasurand(fl validator.FieldLevel) bool {
 	measurand := Measurand(fl.Field().String())
 	switch measurand {
-	case MeasueandSoC, MeasurandCurrentExport, MeasurandCurrentImport, MeasurandCurrentOffered, MeasurandEnergyActiveExportInterval, MeasurandEnergyActiveExportRegister, MeasurandEnergyReactiveExportInterval, MeasurandEnergyReactiveExportRegister, MeasurandEnergyReactiveImportRegister, MeasurandEnergyReactiveImportInterval, MeasurandEnergyActiveImportInterval, MeasurandEnergyActiveImportRegister, MeasurandFrequency, MeasurandPowerActiveExport, MeasurandPowerActiveImport, MeasurandPowerReactiveImport, MeasurandPowerReactiveExport, MeasurandPowerOffered, MeasurandPowerFactor, MeasurandVoltage, MeasurandTemperature, MeasurandEnergyActiveNet, MeasurandEnergyApparentNet, MeasurandEnergyReactiveNet, MeasurandEnergyApparentImport, MeasurandEnergyApparentExport:
+	case MeasueandSoC, MeasurandCurrentExport, MeasurandCurrentImport, MeasurandCurrentOffered, MeasurandEnergyActiveExportInterval, MeasurandEnergyActiveExportRegister, MeasurandEnergyReactiveExportInterval, MeasurandEnergyReactiveExportRegister, MeasurandEnergyReactiveImportRegister, MeasurandEnergyReactiveImportInterval, MeasurandEnergyActiveImportInterval, MeasurandEnergyActiveImportRegister, MeasurandFrequency, MeasurandPowerActiveExport, MeasurandPowerActiveImport, MeasurandPowerReactiveImport, MeasurandPowerReactiveExport, MeasurandPowerOffered, MeasurandPowerFactor, MeasurandVoltage, MeasurandTemperature, MeasurandEnergyActiveNet, MeasurandEnergyApparentNet, MeasurandEnergyReactiveNet, MeasurandEnergyApparentImport, MeasurandEnergyApparentExport, MeasurandEnergyRequestMaximum, MeasurandEnergyRequestTarget, MeasurandEnergyRequestMinimum, MeasurandPowerImportOffered, MeasurandPowerExportOffered, MeasurandPowerImportMinimum, MeasurandPowerExportMinimum, MeasurandPowerActiveSetpoint:
 		return true
 	default:
 		return false
@@ -681,7 +690,7 @@ type SignedMeterValue struct {
 }
 
 type SampledValue struct {
-	Value            float64           `json:"value" validate:"required"`                             // Indicates the measured value.
+	Value            float64           `json:"value" validate:"omitempty"`                            // Indicates the measured value.
 	Context          ReadingContext    `json:"context,omitempty" validate:"omitempty,readingContext"` // Type of detail value: start, end or sample. Default = "Sample.Periodic"
 	Measurand        Measurand         `json:"measurand,omitempty" validate:"omitempty,measurand"`    // Type of measurement. Default = "Energy.Active.Import.Register"
 	Phase            Phase             `json:"phase,omitempty" validate:"omitempty,phase"`            // Indicates how the measured value is to be interpreted. For instance between L1 and neutral (L1-N) Please note that not all values of phase are applicable to all Measurands. When phase is absent, the measured value is interpreted as an overall value.

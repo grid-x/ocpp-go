@@ -56,7 +56,7 @@ type EventData struct {
 	Timestamp             *types.DateTime   `json:"timestamp" validate:"required"`
 	Trigger               EventTrigger      `json:"trigger" validate:"required,eventTrigger"`
 	Cause                 *int              `json:"cause,omitempty" validate:"omitempty"`
-	ActualValue           string            `json:"actualValue" validate:"required,max=2500"`
+	ActualValue           string            `json:"actualValue" validate:"omitempty,max=2500"` // Note: This is required for 2.0.1 but not for BDL
 	TechCode              string            `json:"techCode,omitempty" validate:"omitempty,max=50"`
 	TechInfo              string            `json:"techInfo,omitempty" validate:"omitempty,max=500"`
 	Cleared               bool              `json:"cleared,omitempty"`

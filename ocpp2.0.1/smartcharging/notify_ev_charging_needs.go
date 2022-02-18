@@ -15,6 +15,7 @@ type EnergyTransferMode string
 
 const (
 	EnergyTransferModeDC       EnergyTransferMode = "DC"              // DC charging.
+	EnergyTransferModeDCBPT    EnergyTransferMode = "DC_BPT"          // DC bidirectional (BDL extension)
 	EnergyTransferModeAC1Phase EnergyTransferMode = "AC_single_phase" // AC single phase charging according to IEC 62196.
 	EnergyTransferModeAC2Phase EnergyTransferMode = "AC_two_phase"    // AC two phase charging according to IEC 62196.
 	EnergyTransferModeAC3Phase EnergyTransferMode = "AC_three_phase"  // AC three phase charging according to IEC 62196.
@@ -23,7 +24,7 @@ const (
 func isValidEnergyTransferMode(fl validator.FieldLevel) bool {
 	status := EnergyTransferMode(fl.Field().String())
 	switch status {
-	case EnergyTransferModeAC1Phase, EnergyTransferModeAC2Phase, EnergyTransferModeAC3Phase, EnergyTransferModeDC:
+	case EnergyTransferModeAC1Phase, EnergyTransferModeAC2Phase, EnergyTransferModeAC3Phase, EnergyTransferModeDC, EnergyTransferModeDCBPT:
 		return true
 	default:
 		return false

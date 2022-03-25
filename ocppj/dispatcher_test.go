@@ -36,7 +36,7 @@ func (s *ServerDispatcherTestSuite) SetupTest() {
 	s.dispatcher.SetNetworkServer(&s.websocketServer)
 }
 
-func (s *ServerDispatcherTestSuite) TestSendRequest() {
+func (s *ServerDispatcherTestSuite) TestServerSendRequest() {
 	t := s.T()
 	// Setup
 	clientID := "client1"
@@ -46,6 +46,11 @@ func (s *ServerDispatcherTestSuite) TestSendRequest() {
 		assert.Equal(t, clientID, id)
 		sent <- true
 	}).Return(nil)
+	timeout := time.Second * 1
+	s.dispatcher.SetTimeout(timeout)
+	s.dispatcher.SetOnRequestCanceled(func(cID string, rID string, request ocpp.Request, err *ocpp.Error) {
+		require.Fail(t, "unexpected OnRequestCanceled")
+	})
 	s.dispatcher.Start()
 	require.True(t, s.dispatcher.IsRunning())
 	// Simulate client connection
@@ -73,19 +78,24 @@ func (s *ServerDispatcherTestSuite) TestSendRequest() {
 	s.dispatcher.CompleteRequest(clientID, requestID)
 	assert.False(t, s.state.HasPendingRequest(clientID))
 	assert.True(t, q.IsEmpty())
+	// Assert that no timeout is invoked
+	time.Sleep(1300 * time.Millisecond)
 }
 
-func (s *ServerDispatcherTestSuite) TestRequestCanceled() {
+func (s *ServerDispatcherTestSuite) TestServerRequestCanceled() {
 	t := s.T()
 	// Setup
 	clientID := "client1"
 	canceled := make(chan bool, 1)
 	writeC := make(chan bool, 1)
+	errMsg := "mockError"
+	// Mock write error to trigger onRequestCanceled
+	// This never starts a timeout
 	s.websocketServer.On("Write", mock.AnythingOfType("string"), mock.Anything).Run(func(args mock.Arguments) {
 		id, _ := args.Get(0).(string)
 		assert.Equal(t, clientID, id)
 		_, _ = <-writeC
-	}).Return(fmt.Errorf("mockError"))
+	}).Return(fmt.Errorf(errMsg))
 	// Create mock request
 	req := newMockRequest("somevalue")
 	call, err := s.endpoint.CreateCall(req)
@@ -95,11 +105,13 @@ func (s *ServerDispatcherTestSuite) TestRequestCanceled() {
 	require.NoError(t, err)
 	bundle := ocppj.RequestBundle{Call: call, Data: data}
 	// Set canceled callback
-	s.dispatcher.SetOnRequestCanceled(func(cID string, rID string, action string, request ocpp.Request) {
+	s.dispatcher.SetOnRequestCanceled(func(cID string, rID string, request ocpp.Request, err *ocpp.Error) {
 		assert.Equal(t, clientID, cID)
 		assert.Equal(t, requestID, rID)
-		assert.Equal(t, MockFeatureName, action)
+		assert.Equal(t, MockFeatureName, request.GetFeatureName())
 		assert.Equal(t, req, request)
+		assert.Equal(t, ocppj.InternalError, err.Code)
+		assert.Equal(t, errMsg, err.Description)
 		canceled <- true
 	})
 	s.dispatcher.Start()
@@ -172,6 +184,53 @@ func (s *ServerDispatcherTestSuite) TestDeleteClient() {
 	assert.True(t, s.state.HasPendingRequest(clientID))
 }
 
+func (s *ServerDispatcherTestSuite) TestServerDispatcherTimeout() {
+	t := s.T()
+	// Setup
+	clientID := "client1"
+	canceled := make(chan bool, 1)
+	s.websocketServer.On("Write", mock.AnythingOfType("string"), mock.Anything).Run(func(args mock.Arguments) {
+		id, _ := args.Get(0).(string)
+		assert.Equal(t, clientID, id)
+	}).Return(nil)
+	// Create mock request
+	req := newMockRequest("somevalue")
+	call, err := s.endpoint.CreateCall(req)
+	require.NoError(t, err)
+	requestID := call.UniqueId
+	data, err := call.MarshalJSON()
+	require.NoError(t, err)
+	bundle := ocppj.RequestBundle{Call: call, Data: data}
+	// Set canceled callback
+	s.dispatcher.SetOnRequestCanceled(func(cID string, rID string, request ocpp.Request, err *ocpp.Error) {
+		assert.Equal(t, clientID, cID)
+		assert.Equal(t, requestID, rID)
+		assert.Equal(t, MockFeatureName, request.GetFeatureName())
+		assert.Equal(t, req, request)
+		assert.Equal(t, ocppj.GenericError, err.Code)
+		assert.Equal(t, "Request timed out", err.Description)
+		canceled <- true
+	})
+	// Set timeout and start
+	timeout := time.Second * 1
+	s.dispatcher.SetTimeout(timeout)
+	s.dispatcher.Start()
+	require.True(t, s.dispatcher.IsRunning())
+	// Simulate client connection
+	s.dispatcher.CreateClient(clientID)
+	// Send mock request
+	startTime := time.Now()
+	err = s.dispatcher.SendRequest(clientID, bundle)
+	require.NoError(t, err)
+	// Wait for timeout, canceled callback will be invoked
+	_, ok := <-canceled
+	assert.True(t, ok)
+	elapsed := time.Since(startTime)
+	assert.GreaterOrEqual(t, elapsed.Seconds(), timeout.Seconds())
+	clientQ, _ := s.queueMap.Get(clientID)
+	assert.True(t, clientQ.IsEmpty())
+}
+
 type ClientDispatcherTestSuite struct {
 	suite.Suite
 	mutex           sync.Mutex
@@ -194,7 +253,7 @@ func (c *ClientDispatcherTestSuite) SetupTest() {
 	c.dispatcher.SetNetworkClient(&c.websocketClient)
 }
 
-func (c *ClientDispatcherTestSuite) TestSendRequest() {
+func (c *ClientDispatcherTestSuite) TestClientSendRequest() {
 	t := c.T()
 	// Setup
 	sent := make(chan bool, 1)
@@ -227,14 +286,15 @@ func (c *ClientDispatcherTestSuite) TestSendRequest() {
 
 }
 
-func (c *ClientDispatcherTestSuite) TestRequestCanceled() {
+func (c *ClientDispatcherTestSuite) TestClientRequestCanceled() {
 	t := c.T()
 	// Setup
 	canceled := make(chan bool, 1)
 	writeC := make(chan bool, 1)
+	errMsg := "mockError"
 	c.websocketClient.On("Write", mock.Anything).Run(func(args mock.Arguments) {
 		_, _ = <-writeC
-	}).Return(fmt.Errorf("mockError"))
+	}).Return(fmt.Errorf(errMsg))
 	// Create mock request
 	req := newMockRequest("somevalue")
 	call, err := c.endpoint.CreateCall(req)
@@ -244,10 +304,12 @@ func (c *ClientDispatcherTestSuite) TestRequestCanceled() {
 	require.NoError(t, err)
 	bundle := ocppj.RequestBundle{Call: call, Data: data}
 	// Set canceled callback
-	c.dispatcher.SetOnRequestCanceled(func(rID string, action string, request ocpp.Request) {
+	c.dispatcher.SetOnRequestCanceled(func(rID string, request ocpp.Request, err *ocpp.Error) {
 		assert.Equal(t, requestID, rID)
-		assert.Equal(t, MockFeatureName, action)
+		assert.Equal(t, MockFeatureName, request.GetFeatureName())
 		assert.Equal(t, req, request)
+		assert.Equal(t, ocppj.InternalError, err.Code)
+		assert.Equal(t, errMsg, err.Description)
 		canceled <- true
 	})
 	c.dispatcher.Start()
@@ -268,7 +330,7 @@ func (c *ClientDispatcherTestSuite) TestRequestCanceled() {
 	assert.True(t, c.queue.IsEmpty())
 }
 
-func (c *ClientDispatcherTestSuite) TestDispatcherTimeout() {
+func (c *ClientDispatcherTestSuite) TestClientDispatcherTimeout() {
 	t := c.T()
 	// Setup
 	writeC := make(chan bool, 1)
@@ -286,10 +348,12 @@ func (c *ClientDispatcherTestSuite) TestDispatcherTimeout() {
 	bundle := ocppj.RequestBundle{Call: call, Data: data}
 	// Set low timeout to trigger OnRequestCanceled callback
 	c.dispatcher.SetTimeout(1 * time.Second)
-	c.dispatcher.SetOnRequestCanceled(func(rID string, action string, request ocpp.Request) {
+	c.dispatcher.SetOnRequestCanceled(func(rID string, request ocpp.Request, err *ocpp.Error) {
 		assert.Equal(t, requestID, rID)
-		assert.Equal(t, MockFeatureName, action)
+		assert.Equal(t, MockFeatureName, request.GetFeatureName())
 		assert.Equal(t, req, request)
+		assert.Equal(t, ocppj.GenericError, err.Code)
+		assert.Equal(t, "Request timed out", err.Description)
 		timeout <- true
 	})
 	c.dispatcher.Start()
@@ -307,7 +371,7 @@ func (c *ClientDispatcherTestSuite) TestDispatcherTimeout() {
 	assert.True(t, c.queue.IsEmpty())
 }
 
-func (c *ClientDispatcherTestSuite) TestPauseDispatcher() {
+func (c *ClientDispatcherTestSuite) TestClientPauseDispatcher() {
 	t := c.T()
 	// Create mock request
 	timeout := make(chan bool, 1)
@@ -322,9 +386,9 @@ func (c *ClientDispatcherTestSuite) TestPauseDispatcher() {
 	// Set timeout to test pause functionality
 	c.dispatcher.SetTimeout(500 * time.Millisecond)
 	// The callback will only be triggered at the end of the test case
-	c.dispatcher.SetOnRequestCanceled(func(rID string, action string, request ocpp.Request) {
+	c.dispatcher.SetOnRequestCanceled(func(rID string, request ocpp.Request, err *ocpp.Error) {
 		assert.Equal(t, requestID, rID)
-		assert.Equal(t, MockFeatureName, action)
+		assert.Equal(t, MockFeatureName, request.GetFeatureName())
 		assert.Equal(t, req, request)
 		timeout <- true
 	})
@@ -353,7 +417,7 @@ func (c *ClientDispatcherTestSuite) TestPauseDispatcher() {
 	assert.True(t, c.queue.IsEmpty())
 }
 
-func (c *ClientDispatcherTestSuite) TestSendWhilePausedDispatcher() {
+func (c *ClientDispatcherTestSuite) TestClientSendPausedDispatcher() {
 	t := c.T()
 	// Create mock request
 	c.websocketClient.On("Write", mock.Anything).Run(func(args mock.Arguments) {
@@ -362,7 +426,7 @@ func (c *ClientDispatcherTestSuite) TestSendWhilePausedDispatcher() {
 	// Set timeout (unused for this test)
 	c.dispatcher.SetTimeout(1 * time.Second)
 	// The callback will only be triggered at the end of the test case
-	c.dispatcher.SetOnRequestCanceled(func(rID string, action string, request ocpp.Request) {
+	c.dispatcher.SetOnRequestCanceled(func(rID string, request ocpp.Request, err *ocpp.Error) {
 		require.Fail(t, "unexpected OnRequestCanceled")
 	})
 	c.dispatcher.Start()

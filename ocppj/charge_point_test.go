@@ -51,7 +51,10 @@ func (suite *OcppJTestSuite) TestClientStoppedError() {
 	t := suite.T()
 	// Start client
 	suite.mockClient.On("Start", mock.AnythingOfType("string")).Return(nil)
-	suite.mockClient.On("Stop").Return(nil)
+	suite.mockClient.On("Stop").Return(nil).Run(func(args mock.Arguments) {
+		// Simulate websocket internal working
+		suite.mockClient.DisconnectedHandler(nil)
+	})
 	err := suite.chargePoint.Start("someUrl")
 	require.NoError(t, err)
 	// Stop client
@@ -598,10 +601,11 @@ func (suite *OcppJTestSuite) TestClientResponseTimeout() {
 		require.NotNil(t, call)
 		requestID = call.UniqueId
 	}).Return(nil)
-	suite.clientDispatcher.SetOnRequestCanceled(func(rID string, action string, request ocpp.Request) {
+	suite.clientDispatcher.SetOnRequestCanceled(func(rID string, request ocpp.Request, err *ocpp.Error) {
 		assert.Equal(t, requestID, rID)
-		assert.Equal(t, MockFeatureName, action)
+		assert.Equal(t, MockFeatureName, request.GetFeatureName())
 		assert.Equal(t, req, request)
+		assert.Error(t, err)
 		timeoutC <- true
 	})
 	// Sets a low response timeout for testing purposes

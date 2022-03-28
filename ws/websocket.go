@@ -17,34 +17,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lorenzodonini/ocpp-go/logging"
+
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 )
-
-type Logger interface {
-	RecvMessage(id string, data []byte)
-	SendMessage(id string, data []byte)
-}
-
-type VoidLogger struct{}
-
-func (*VoidLogger) RecvMessage(string, []byte) {}
-
-func (*VoidLogger) SendMessage(string, []byte) {}
-
-// The internal verbose logger
-var log Logger = &VoidLogger{}
-
-// Sets a custom Logger implementation, allowing the websocket package to log events.
-// By default, a VoidLogger is used, so no logs will be sent to any output.
-//
-// The function panics, if a nil logger is passed.
-func SetLogger(logger Logger) {
-	if logger == nil {
-		panic("cannot set a nil logger")
-	}
-	log = logger
-}
 
 const (
 	// Time allowed to write a message to the peer.
@@ -66,6 +43,20 @@ const (
 	// Default maximum reconnection delay for websockets
 	defaultReconnectMaxBackoff = 2 * time.Minute
 )
+
+// The internal verbose logger
+var log logging.Logger
+
+// Sets a custom Logger implementation, allowing the package to log events.
+// By default, a VoidLogger is used, so no logs will be sent to any output.
+//
+// The function panics, if a nil logger is passed.
+func SetLogger(logger logging.Logger) {
+	if logger == nil {
+		panic("cannot set a nil logger")
+	}
+	log = logger
+}
 
 // Config contains optional configuration parameters for a websocket server.
 // Setting the parameter allows to define custom timeout intervals for websocket network operations.
@@ -163,7 +154,7 @@ func (e HttpConnectionError) Error() string {
 
 // ---------------------- SERVER ----------------------
 
-// A Websocket server, which passively listens for incoming connections on ws or wss protocol.
+// WsServer defines a websocket server, which passively listens for incoming connections on ws or wss protocol.
 // The offered API are of asynchronous nature, and each incoming connection/message is handled using callbacks.
 //
 // To create a new ws server, use:
@@ -277,7 +268,7 @@ func NewServer() *Server {
 	}
 }
 
-// Creates a new secure websocket server. All created websocket channels will use TLS.
+// NewTLSServer creates a new secure websocket server. All created websocket channels will use TLS.
 //
 // You need to pass a filepath to the server TLS certificate and key.
 //
@@ -337,6 +328,7 @@ func (server *Server) SetCheckOriginHandler(handler func(r *http.Request) bool) 
 }
 
 func (server *Server) error(err error) {
+	log.Error(err)
 	if server.errC != nil {
 		server.errC <- err
 	}
@@ -377,6 +369,7 @@ func (server *Server) Start(port int, listenPath string) {
 
 	defer ln.Close()
 
+	log.Infof("listening on tcp network %v", addr)
 	server.httpServer.RegisterOnShutdown(server.stopConnections)
 	if server.tlsCertificatePath != "" && server.tlsCertificateKey != "" {
 		err = server.httpServer.ServeTLS(ln, server.tlsCertificatePath, server.tlsCertificateKey)
@@ -390,6 +383,7 @@ func (server *Server) Start(port int, listenPath string) {
 }
 
 func (server *Server) Stop() {
+	log.Info("stopping websocket server")
 	err := server.httpServer.Shutdown(context.TODO())
 	if err != nil {
 		server.error(fmt.Errorf("shutdown failed: %w", err))
@@ -409,6 +403,7 @@ func (server *Server) StopConnection(id string, closeError websocket.CloseError)
 	if !ok {
 		return fmt.Errorf("couldn't stop websocket connection. No connection with id %s is open", id)
 	}
+	log.Debugf("sending stop signal for websocket %s", ws.ID())
 	ws.closeC <- closeError
 	return nil
 }
@@ -428,7 +423,7 @@ func (server *Server) Write(webSocketId string, data []byte) error {
 	if !ok {
 		return fmt.Errorf("couldn't write to websocket. No socket with id %v is open", webSocketId)
 	}
-	log.SendMessage(webSocketId, data)
+	log.Debugf("queuing data for websocket %s", webSocketId)
 	ws.outQueue <- data
 	return nil
 }
@@ -436,6 +431,8 @@ func (server *Server) Write(webSocketId string, data []byte) error {
 func (server *Server) wsHandler(w http.ResponseWriter, r *http.Request) {
 	responseHeader := http.Header{}
 	url := r.URL
+	id := path.Base(url.Path)
+	log.Debugf("handling new connection for %s from %s", id, r.RemoteAddr)
 	// Negotiate sub-protocol
 	clientSubprotocols := websocket.Subprotocols(r)
 	negotiatedSuprotocol := ""
@@ -476,7 +473,6 @@ out:
 	}
 
 	// The id of the charge point is the final path element
-	id := path.Base(url.Path)
 	ws := WebSocket{
 		connection:         conn,
 		id:                 id,
@@ -487,6 +483,7 @@ out:
 		tlsConnectionState: r.TLS,
 		closed:             make(chan struct{}),
 	}
+	log.Debugf("upgraded websocket connection for %s from %s", id, conn.RemoteAddr().String())
 	// If unsupported subprotocol, terminate the connection immediately
 	if negotiatedSuprotocol == "" {
 		server.error(fmt.Errorf("unsupported subprotocols %v for new client %v (%v)", clientSubprotocols, id, r.RemoteAddr))
@@ -501,7 +498,7 @@ out:
 	// There is already a connection with the same ID. Close the new one immediately with a PolicyViolation.
 	if _, exists := server.connections[id]; exists {
 		server.connMutex.Unlock()
-		server.error(fmt.Errorf("client %v already exists, closing duplicate client", id))
+		server.error(fmt.Errorf("client %s already exists, closing duplicate client", id))
 		_ = conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "a connection with this ID already exists"),
 			time.Now().Add(server.timeoutConfig.WriteWait))
@@ -512,30 +509,39 @@ out:
 	server.connections[ws.id] = &ws
 	server.connMutex.Unlock()
 	// Read and write routines are started in separate goroutines and function will return immediately
+	go server.writePump(&ws)
+	go server.readPump(&ws)
 	if server.newClientHandler != nil {
 		var channel Channel = &ws
 		server.newClientHandler(channel)
 	}
-	go server.writePump(&ws)
-	go server.readPump(&ws)
+}
+
+func (server *Server) getReadTimeout() time.Time {
+	if server.timeoutConfig.PingWait == 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(server.timeoutConfig.PingWait)
 }
 
 func (server *Server) readPump(ws *WebSocket) {
 	conn := ws.connection
 
 	conn.SetPingHandler(func(appData string) error {
+		log.Debugf("ping received from %s", ws.ID())
 		ws.pingMessage <- []byte(appData)
-		err := conn.SetReadDeadline(time.Now().Add(server.timeoutConfig.PingWait))
+		err := conn.SetReadDeadline(server.getReadTimeout())
 		return err
 	})
-	_ = conn.SetReadDeadline(time.Now().Add(server.timeoutConfig.PingWait))
+	_ = conn.SetReadDeadline(server.getReadTimeout())
 
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-				server.error(fmt.Errorf("read failed for %s: %w", ws.ID(), err))
+				server.error(fmt.Errorf("read failed unexpectedly for %s: %w", ws.ID(), err))
 			}
+			log.Debugf("handling read error for %s: %v", ws.ID(), err.Error())
 			// Notify writePump of error. Force close will be handled there
 			ws.forceCloseC <- err
 			return
@@ -543,14 +549,13 @@ func (server *Server) readPump(ws *WebSocket) {
 
 		if server.messageHandler != nil {
 			var channel Channel = ws
-			log.RecvMessage(ws.ID(), message)
 			err = server.messageHandler(channel, message)
 			if err != nil {
 				server.error(fmt.Errorf("handling failed for %s: %w", ws.ID(), err))
 				continue
 			}
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(server.timeoutConfig.PingWait))
+		_ = conn.SetReadDeadline(server.getReadTimeout())
 	}
 }
 
@@ -575,6 +580,7 @@ func (server *Server) writePump(ws *WebSocket) {
 				server.cleanupConnection(ws)
 				return
 			}
+			log.Debugf("written %d bytes to %s", len(data), ws.ID())
 		case ping := <-ws.pingMessage:
 			_ = conn.SetWriteDeadline(time.Now().Add(server.timeoutConfig.WriteWait))
 			err := conn.WriteMessage(websocket.PongMessage, ping)
@@ -584,7 +590,9 @@ func (server *Server) writePump(ws *WebSocket) {
 				server.cleanupConnection(ws)
 				return
 			}
+			log.Debugf("pong sent to %s", ws.ID())
 		case closeErr, _ := <-ws.closeC:
+			log.Debugf("closing connection to %s", ws.ID())
 			// Closing connection gracefully
 			if err := conn.WriteControl(
 				websocket.CloseMessage,
@@ -599,6 +607,7 @@ func (server *Server) writePump(ws *WebSocket) {
 		case closed, ok := <-ws.forceCloseC:
 			if !ok || closed != nil {
 				// Connection was forcefully closed, invoke cleanup
+				log.Debugf("handling forced close signal for %s", ws.ID())
 				server.cleanupConnection(ws)
 			}
 			return
@@ -615,6 +624,7 @@ func (server *Server) cleanupConnection(ws *WebSocket) {
 	close(ws.closeC)
 	delete(server.connections, ws.id)
 	server.connMutex.Unlock()
+	log.Infof("closed connection to %s", ws.ID())
 	if server.disconnectedHandler != nil {
 		server.disconnectedHandler(ws)
 	}
@@ -622,7 +632,7 @@ func (server *Server) cleanupConnection(ws *WebSocket) {
 
 // ---------------------- CLIENT ----------------------
 
-// A Websocket client, needed to connect to a websocket server.
+// WsClient defines a websocket client, needed to connect to a websocket server.
 // The offered API are of asynchronous nature, and each incoming message is handled using callbacks.
 //
 // To create a new ws client, use:
@@ -729,7 +739,7 @@ func NewClient() *Client {
 	return &Client{dialOptions: []func(*websocket.Dialer){}, timeoutConfig: NewClientTimeoutConfig(), header: http.Header{}}
 }
 
-// Creates a new secure websocket client. If supported by the server, the websocket channel will use TLS.
+// NewTLSClient creates a new secure websocket client. If supported by the server, the websocket channel will use TLS.
 //
 // Additional options may be added using the AddOption function.
 // Basic authentication can be set using the SetBasicAuth function.
@@ -785,6 +795,13 @@ func (client *Client) SetHeaderValue(key string, value string) {
 	client.header.Set(key, value)
 }
 
+func (client *Client) getReadTimeout() time.Time {
+	if client.timeoutConfig.PongWait == 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(client.timeoutConfig.PongWait)
+}
+
 func (client *Client) writePump() {
 	ticker := time.NewTicker(client.timeoutConfig.PingPeriod)
 	conn := client.webSocket.connection
@@ -793,7 +810,7 @@ func (client *Client) writePump() {
 		ticker.Stop()
 		client.cleanup()
 		// Invoke callback
-		if client.onDisconnected != nil && err != nil {
+		if client.onDisconnected != nil {
 			client.onDisconnected(err)
 		}
 	}
@@ -802,6 +819,7 @@ func (client *Client) writePump() {
 		select {
 		case data, _ := <-client.webSocket.outQueue:
 			// Send data
+			log.Debugf("sending data")
 			_ = conn.SetWriteDeadline(time.Now().Add(client.timeoutConfig.WriteWait))
 			err := conn.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
@@ -810,6 +828,7 @@ func (client *Client) writePump() {
 				client.handleReconnection()
 				return
 			}
+			log.Debugf("written %d bytes", len(data))
 		case <-ticker.C:
 			// Send periodic ping
 			_ = conn.SetWriteDeadline(time.Now().Add(client.timeoutConfig.WriteWait))
@@ -819,7 +838,9 @@ func (client *Client) writePump() {
 				client.handleReconnection()
 				return
 			}
+			log.Debugf("ping sent")
 		case closeErr, _ := <-client.webSocket.closeC:
+			log.Debugf("closing connection")
 			// Closing connection gracefully
 			if err := conn.WriteControl(
 				websocket.CloseMessage,
@@ -833,6 +854,7 @@ func (client *Client) writePump() {
 			closure(nil)
 			return
 		case closed, ok := <-client.webSocket.forceCloseC:
+			log.Debugf("handling forced close signal")
 			// Read pump sent a forceClose signal (reading failed -> aborting the connection)
 			if !ok || closed != nil {
 				closure(closed)
@@ -845,9 +867,10 @@ func (client *Client) writePump() {
 
 func (client *Client) readPump() {
 	conn := client.webSocket.connection
-	_ = conn.SetReadDeadline(time.Now().Add(client.timeoutConfig.PongWait))
+	_ = conn.SetReadDeadline(client.getReadTimeout())
 	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(client.timeoutConfig.PongWait))
+		log.Debugf("pong received")
+		return conn.SetReadDeadline(client.getReadTimeout())
 	})
 	for {
 		_, message, err := conn.ReadMessage()
@@ -860,8 +883,8 @@ func (client *Client) readPump() {
 			return
 		}
 
+		log.Debugf("received %v bytes", len(message))
 		if client.messageHandler != nil {
-			log.RecvMessage(client.webSocket.ID(), message)
 			err = client.messageHandler(message)
 			if err != nil {
 				client.error(fmt.Errorf("handle failed: %w", err))
@@ -884,6 +907,7 @@ func (client *Client) cleanup() {
 }
 
 func (client *Client) handleReconnection() {
+	log.Info("started automatic reconnection handler")
 	delay := client.timeoutConfig.ReconnectBackoff
 	for {
 		// Wait before reconnecting
@@ -892,9 +916,11 @@ func (client *Client) handleReconnection() {
 		case <-client.reconnectC:
 			return
 		}
+
 		err := client.Start(client.url.String())
 		if err == nil {
 			// Re-connection was successful
+			log.Info("reconnected successfully to server")
 			if client.onReconnected != nil {
 				client.onReconnected()
 			}
@@ -925,7 +951,7 @@ func (client *Client) Write(data []byte) error {
 	if !client.IsConnected() {
 		return fmt.Errorf("client is currently not connected, cannot send data")
 	}
-	log.SendMessage(client.webSocket.ID(), data)
+	log.Debugf("queuing data for server")
 	client.webSocket.outQueue <- data
 	return nil
 }
@@ -946,6 +972,7 @@ func (client *Client) Start(urlStr string) error {
 		option(&dialer)
 	}
 	// Connect
+	log.Info("connecting to server")
 	ws, resp, err := dialer.Dial(urlStr, client.header)
 	if err != nil {
 		if resp != nil {
@@ -972,15 +999,17 @@ func (client *Client) Start(urlStr string) error {
 		forceCloseC:        make(chan error, 1),
 		tlsConnectionState: resp.TLS,
 	}
+	log.Infof("connected to server as %s", id)
 	client.reconnectC = make(chan struct{})
 	client.setConnected(true)
-	//Start reader and write routine
+	// Start reader and write routine
 	go client.writePump()
 	go client.readPump()
 	return nil
 }
 
 func (client *Client) Stop() {
+	log.Infof("closing connection to server")
 	client.mutex.Lock()
 	if client.connected {
 		client.connected = false
@@ -997,9 +1026,12 @@ func (client *Client) Stop() {
 		close(client.errC)
 		client.errC = nil
 	}
+	// Wait for connection to actually close
+
 }
 
 func (client *Client) error(err error) {
+	log.Error(err)
 	if client.errC != nil {
 		client.errC <- err
 	}
@@ -1010,4 +1042,8 @@ func (client *Client) Errors() <-chan error {
 		client.errC = make(chan error, 1)
 	}
 	return client.errC
+}
+
+func init() {
+	log = &logging.VoidLogger{}
 }

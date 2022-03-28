@@ -399,7 +399,7 @@ func NewCSMS(endpoint *ocppj.Server, server ws.WsServer) CSMS {
 	if server == nil {
 		server = ws.NewServer()
 	}
-	server.AddSupportedSubprotocol(types.V2Subprotocol)
+	server.AddSupportedSubprotocol(types.V201Subprotocol)
 	if endpoint == nil {
 		dispatcher := ocppj.NewDefaultServerDispatcher(ocppj.NewFIFOQueueMap(0))
 		endpoint = ocppj.NewServer(server, dispatcher, nil, authorization.Profile, availability.Profile, data.Profile, diagnostics.Profile, display.Profile, firmware.Profile, iso15118.Profile, localauth.Profile, meter.Profile, provisioning.Profile, remotecontrol.Profile, reservation.Profile, security.Profile, smartcharging.Profile, tariffcost.Profile, transactions.Profile)
@@ -413,6 +413,9 @@ func NewCSMS(endpoint *ocppj.Server, server ws.WsServer) CSMS {
 	})
 	cs.server.SetErrorHandler(func(client ws.Channel, err *ocpp.Error, details interface{}) {
 		cs.handleIncomingError(client, err, details)
+	})
+	cs.server.SetCanceledRequestHandler(func(clientID string, requestID string, request ocpp.Request, err *ocpp.Error) {
+		cs.handleCanceledRequest(clientID, request, err)
 	})
 	return &cs
 }

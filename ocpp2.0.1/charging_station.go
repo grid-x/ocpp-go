@@ -588,7 +588,13 @@ func (cs *chargingStation) Start(csmsUrl string) error {
 }
 
 func (cs *chargingStation) Stop() {
+	close(cs.stopC)
 	cs.client.Stop()
+
+	if cs.errC != nil {
+		close(cs.errC)
+		cs.errC = nil
+	}
 }
 
 func (cs *chargingStation) notImplementedError(requestId string, action string) {

@@ -481,11 +481,15 @@ func (cs *chargingStation) SendRequest(request ocpp.Request) (ocpp.Response, err
 	if err != nil {
 		return nil, err
 	}
-	asyncResult, ok := <-asyncResponseC
-	if !ok {
-		return nil, fmt.Errorf("internal error while receiving result for %v request", request.GetFeatureName())
+	select {
+	case asyncResult, ok := <-asyncResponseC:
+		if !ok {
+			return nil, fmt.Errorf("internal error while receiving result for %v request", request.GetFeatureName())
+		}
+		return asyncResult.r, asyncResult.e
+	case <-cs.stopC:
+		return nil, fmt.Errorf("client stopped while waiting for response to %v", request.GetFeatureName())
 	}
-	return asyncResult.r, asyncResult.e
 }
 
 func (cs *chargingStation) SendRequestAsync(request ocpp.Request, callback func(response ocpp.Response, err error)) error {
@@ -588,7 +592,13 @@ func (cs *chargingStation) Start(csmsUrl string) error {
 }
 
 func (cs *chargingStation) Stop() {
+	close(cs.stopC)
 	cs.client.Stop()
+
+	if cs.errC != nil {
+		close(cs.errC)
+		cs.errC = nil
+	}
 }
 
 func (cs *chargingStation) notImplementedError(requestId string, action string) {

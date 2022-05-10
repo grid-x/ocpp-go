@@ -398,6 +398,7 @@ type ChargingProfileKindType string
 type RecurrencyKindType string
 type ChargingRateUnitType string
 type ChargingLimitSourceType string
+type V2XOperationModeType string
 
 const (
 	ChargingProfilePurposeChargingStationExternalConstraints ChargingProfilePurposeType = "ChargingStationExternalConstraints"
@@ -415,6 +416,7 @@ const (
 	ChargingLimitSourceOther                                 ChargingLimitSourceType    = "Other"
 	ChargingLimitSourceSO                                    ChargingLimitSourceType    = "SO"
 	ChargingLimitSourceCSO                                   ChargingLimitSourceType    = "CSO"
+	V2XOperationModeCentralSetpoint                          V2XOperationModeType       = "CentralSetpoint"
 )
 
 func isValidChargingProfilePurpose(fl validator.FieldLevel) bool {
@@ -468,9 +470,12 @@ func isValidChargingLimitSource(fl validator.FieldLevel) bool {
 }
 
 type ChargingSchedulePeriod struct {
-	StartPeriod  int     `json:"startPeriod" validate:"gte=0"`
-	Limit        float64 `json:"limit" validate:"gte=0"`
-	NumberPhases *int    `json:"numberPhases,omitempty" validate:"omitempty,gte=0"`
+	StartPeriod      int                   `json:"startPeriod" validate:"gte=0"`
+	Limit            float64               `json:"limit" validate:"gte=0"`
+	NumberPhases     *int                  `json:"numberPhases,omitempty" validate:"omitempty,gte=0"`
+	DischargeLimit   *int                  `json:"dischargeLimit,omitempty" validate:"omitempty"`   // (BDL Extension)
+	Setpoint         *int                  `json:"setpoint,omitempty" validate:"omitempty"`         // (BDL Extension)
+	V2XOperationMode *V2XOperationModeType `json:"v2xOperationMode,omitempty" validate:"omitempty"` // (BDL Extension)
 }
 
 func NewChargingSchedulePeriod(startPeriod int, limit float64) ChargingSchedulePeriod {

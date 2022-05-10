@@ -70,12 +70,28 @@ type DCChargingParameters struct {
 	BulkSoC          *int `json:"bulkSoC,omitempty" validate:"omitempty,gte=0,lte=100"`       // Percentage of SoC at which the EV considers a fast charging process to end. (possible values: 0 - 100)
 }
 
+type V2XChargingParameters struct {
+	EVMaxEnergyRequest    int `json:"evMaxEnergyRequest" validate:"omitempty"`
+	EVMinEnergyRequest    int `json:"evMinEnergyRequest" validate:"omitempty"`
+	EvTargetenergyRequest int `json:"evTargetenergyRequest" validate:"omitempty"`
+	MaxChargeCurrent      int `json:"maxChargeCurrent" validate:"omitempty,gte=0"`
+	MaxChargePower        int `json:"maxChargePower" validate:"omitempty,gte=0"`
+	MaxDischargeCurrent   int `json:"maxDischargeCurrent" validate:"omitempty,gte=0"`
+	MaxDischargePower     int `json:"maxDischargePower" validate:"omitempty,gte=0"`
+	MaxVoltage            int `json:"maxVoltage" validate:"omitempty,gte=0"`
+	MinChargeCurrent      int `json:"minChargeCurrent" validate:"omitempty,gte=0"`
+	MinChargePower        int `json:"minChargePower" validate:"omitempty,gte=0"`
+	MinDischargeCurrent   int `json:"minDischargeCurrent" validate:"omitempty,gte=0"`
+	MinDischargePower     int `json:"minDischargePower" validate:"omitempty,gte=0"`
+}
+
 // ChargingNeeds contains the characteristics of the energy delivery required. Used by NotifyEVChargingNeedsRequest.
 type ChargingNeeds struct {
-	RequestedEnergyTransfer EnergyTransferMode    `json:"requestedEnergyTransfer" validate:"required,energyTransferMode"` // Mode of energy transfer requested by the EV.
-	DepartureTime           *types.DateTime       `json:"departureTime,omitempty" validate:"omitempty"`                   // Estimated departure time of the EV.
-	ACChargingParameters    *ACChargingParameters `json:"acChargingParameters,omitempty" validate:"omitempty,dive"`       // AC charging parameters.
-	DCChargingParameters    *DCChargingParameters `json:"dcChargingParameters,omitempty" validate:"omitempty,dive"`       // AC charging parameters.
+	RequestedEnergyTransfer EnergyTransferMode     `json:"requestedEnergyTransfer" validate:"required,energyTransferMode"` // Mode of energy transfer requested by the EV.
+	DepartureTime           *types.DateTime        `json:"departureTime,omitempty" validate:"omitempty"`                   // Estimated departure time of the EV.
+	ACChargingParameters    *ACChargingParameters  `json:"acChargingParameters,omitempty" validate:"omitempty,dive"`       // AC charging parameters.
+	DCChargingParameters    *DCChargingParameters  `json:"dcChargingParameters,omitempty" validate:"omitempty,dive"`       // DC charging parameters.
+	V2XChargingParameters   *V2XChargingParameters `json:"v2xChargingParameters,omitempty" validate:"omitempty"`           // Vehicle to grid parameters (BDL extension)
 }
 
 // The field definition of the NotifyEVChargingNeeds request payload sent by the Charging Station to the CSMS.

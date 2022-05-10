@@ -15,7 +15,7 @@ type EnergyTransferMode string
 
 const (
 	EnergyTransferModeDC       EnergyTransferMode = "DC"              // DC charging.
-	EnergyTransferModeDCBPT    EnergyTransferMode = "DC_BPT"          // DC Bidirectional (BDL extension)
+	EnergyTransferModeDCBPT    EnergyTransferMode = "DC_BPT"          // DC bidirectional (BDL extension)
 	EnergyTransferModeAC1Phase EnergyTransferMode = "AC_single_phase" // AC single phase charging according to IEC 62196.
 	EnergyTransferModeAC2Phase EnergyTransferMode = "AC_two_phase"    // AC two phase charging according to IEC 62196.
 	EnergyTransferModeAC3Phase EnergyTransferMode = "AC_three_phase"  // AC three phase charging according to IEC 62196.

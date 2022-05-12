@@ -948,7 +948,9 @@ func (client *Client) IsConnected() bool {
 }
 
 func (client *Client) Write(data []byte) error {
-	if !client.IsConnected() {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	if !client.connected {
 		return fmt.Errorf("client is currently not connected, cannot send data")
 	}
 	log.Debugf("queuing data for server")

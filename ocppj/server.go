@@ -153,6 +153,7 @@ func (s *Server) SendRequest(clientID string, request ocpp.Request) error {
 		return err
 	}
 	log.Debugf("enqueued CALL [%s, %s] for %s", call.UniqueId, call.Action, clientID)
+	log.Debugf(">>> %s", string(jsonMessage))
 	return nil
 }
 
@@ -184,6 +185,7 @@ func (s *Server) SendResponse(clientID string, requestId string, response ocpp.R
 		return err
 	}
 	log.Debugf("sent CALL RESULT [%s] for %s", callResult.UniqueId, clientID)
+	log.Debugf(">>> %s", string(jsonMessage))
 	return nil
 }
 
@@ -214,6 +216,8 @@ func (s *Server) SendError(clientID string, requestId string, errorCode ocpp.Err
 }
 
 func (s *Server) ocppMessageHandler(wsChannel ws.Channel, data []byte) error {
+	log.Debugf("<<< %s", string(data))
+
 	parsedJson, err := ParseRawJsonMessage(data)
 	if err != nil {
 		log.Error(err)

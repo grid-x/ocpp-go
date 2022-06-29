@@ -8,10 +8,14 @@ import (
 )
 
 const (
-	V2Subprotocol      = "ocpp2.0"
-	V201Subprotocol    = "ocpp2.0.1"
-	V201BDLSubprotocol = "ocpp2.0.1.bdl"
+	V2Subprotocol   = "ocpp2.0"
+	V201Subprotocol = "ocpp2.0.1"
 )
+
+// BDL supported subprotocols
+// Note: can change with newer software
+// "ocpp2.0.1bdl" is used with Software 2021.33.15751.NB-rc
+var V201BDLSubprotocols = []string{"ocpp2.0.1.bdl", "ocpp2.0.1bdl"}
 
 type PropertyViolation struct {
 	error

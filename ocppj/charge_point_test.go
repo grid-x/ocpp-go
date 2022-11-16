@@ -19,7 +19,7 @@ import (
 
 func (suite *OcppJTestSuite) TestNewClient() {
 	clientID := "mock_id"
-	c := ocppj.NewClient(clientID, nil, nil, nil)
+	c := ocppj.NewClient(clientID, suite.mockClient, nil, nil)
 	assert.NotNil(suite.T(), c)
 	assert.Equal(suite.T(), clientID, c.Id)
 }
@@ -87,6 +87,18 @@ func (suite *OcppJTestSuite) TestChargePointSendInvalidRequest() {
 	assert.NotNil(suite.T(), err)
 }
 
+func (suite *OcppJTestSuite) TestChargePointSendRequestNoValidation() {
+	suite.mockClient.On("Write", mock.Anything).Return(nil)
+	suite.mockClient.On("Start", mock.AnythingOfType("string")).Return(nil)
+	_ = suite.chargePoint.Start("someUrl")
+	mockRequest := newMockRequest("")
+	// Temporarily disable message validation
+	ocppj.SetMessageValidation(false)
+	defer ocppj.SetMessageValidation(true)
+	err := suite.chargePoint.SendRequest(mockRequest)
+	assert.Nil(suite.T(), err)
+}
+
 func (suite *OcppJTestSuite) TestChargePointSendInvalidJsonRequest() {
 	suite.mockClient.On("Write", mock.Anything).Return(nil)
 	suite.mockClient.On("Start", mock.AnythingOfType("string")).Return(nil)
@@ -144,6 +156,20 @@ func (suite *OcppJTestSuite) TestChargePointSendConfirmation() {
 	// This is allowed. Endpoint doesn't keep track of incoming requests, but only outgoing ones
 	err := suite.chargePoint.SendResponse(mockUniqueId, mockConfirmation)
 	assert.Nil(t, err)
+}
+
+func (suite *OcppJTestSuite) TestChargePointSendConfirmationNoValidation() {
+	mockUniqueId := "6789"
+	suite.mockClient.On("Write", mock.Anything).Return(nil)
+	suite.mockClient.On("Start", mock.AnythingOfType("string")).Return(nil)
+	_ = suite.chargePoint.Start("someUrl")
+	mockConfirmation := newMockConfirmation("")
+	// Temporarily disable message validation
+	ocppj.SetMessageValidation(false)
+	defer ocppj.SetMessageValidation(true)
+	// This is allowed. Endpoint doesn't keep track of incoming requests, but only outgoing ones
+	err := suite.chargePoint.SendResponse(mockUniqueId, mockConfirmation)
+	assert.Nil(suite.T(), err)
 }
 
 func (suite *OcppJTestSuite) TestChargePointSendInvalidConfirmation() {
@@ -362,7 +388,7 @@ func (suite *OcppJTestSuite) TestClientParallelRequests() {
 	require.Nil(t, err)
 	for i := 0; i < messagesToQueue; i++ {
 		go func() {
-			req := newMockRequest(fmt.Sprintf("someReq"))
+			req := newMockRequest("someReq")
 			err = suite.chargePoint.SendRequest(req)
 			require.Nil(t, err)
 		}()
@@ -419,7 +445,8 @@ func (suite *OcppJTestSuite) TestClientRequestFlow() {
 				require.Nil(t, err)
 			} else {
 				// Send CallError
-				res := suite.chargePoint.CreateCallError(call.GetUniqueId(), ocppj.GenericError, fmt.Sprintf("error-%v", req.MockValue), nil)
+				res, err := suite.chargePoint.CreateCallError(call.GetUniqueId(), ocppj.GenericError, fmt.Sprintf("error-%v", req.MockValue), nil)
+				require.Nil(t, err)
 				data, err = res.MarshalJSON()
 				require.Nil(t, err)
 			}
@@ -499,7 +526,7 @@ func (suite *OcppJTestSuite) TestClientDisconnected() {
 		require.NoError(t, err)
 	}
 	// Wait for trigger disconnect after a few responses were returned
-	_ = <-triggerC
+	<-triggerC
 	assert.False(t, suite.clientDispatcher.IsPaused())
 	suite.mockClient.DisconnectedHandler(disconnectError)
 	time.Sleep(200 * time.Millisecond)
@@ -565,7 +592,7 @@ func (suite *OcppJTestSuite) TestClientReconnected() {
 		require.NoError(t, err)
 	}
 	// Wait for trigger disconnect after a few responses were returned
-	_ = <-triggerC
+	<-triggerC
 	suite.mockClient.DisconnectedHandler(disconnectError)
 	// One message was sent, but all others are still in queue
 	time.Sleep(200 * time.Millisecond)
@@ -577,7 +604,7 @@ func (suite *OcppJTestSuite) TestClientReconnected() {
 	assert.True(t, suite.clientDispatcher.IsRunning())
 	assert.False(t, suite.clientRequestQueue.IsEmpty())
 	// Wait until remaining messages are sent
-	_ = <-triggerC
+	<-triggerC
 	assert.False(t, suite.clientDispatcher.IsPaused())
 	assert.True(t, suite.clientDispatcher.IsRunning())
 	assert.Equal(t, messagesToQueue, sentMessages)
@@ -587,8 +614,8 @@ func (suite *OcppJTestSuite) TestClientReconnected() {
 
 // TestClientResponseTimeout ensures that upon a response timeout, the client dispatcher:
 //
-//  - cancels the current pending request
-//	- fires an error, which is returned to the caller
+//   - cancels the current pending request
+//   - fires an error, which is returned to the caller
 func (suite *OcppJTestSuite) TestClientResponseTimeout() {
 	t := suite.T()
 	requestID := ""
@@ -623,7 +650,7 @@ func (suite *OcppJTestSuite) TestClientResponseTimeout() {
 	assert.Equal(t, 1, suite.clientRequestQueue.Size())
 	assert.True(t, state.HasPendingRequest())
 	// Wait for timeout error to be thrown
-	_ = <-timeoutC
+	<-timeoutC
 	assert.True(t, suite.clientRequestQueue.IsEmpty())
 	assert.True(t, suite.clientDispatcher.IsRunning())
 	assert.False(t, state.HasPendingRequest())

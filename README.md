@@ -35,7 +35,8 @@ There are currently no plans of supporting OCPP-S.
 Planned milestones and features:
 
 - [x] OCPP 1.6
-- [ ] OCPP 2.0 
+- [x] OCPP 2.0.1 (examples working, but will need more real-world testing)
+- [ ] Dedicated package for configuration management
 
 ## OCPP 1.6 Usage
 
@@ -244,8 +245,9 @@ To send requests to the central station, you have two options. You may either us
 bootConf, err := chargePoint.BootNotification("model1", "vendor1")
 if err != nil {
 	log.Fatal(err)
+} else {
+	log.Printf("status: %v, interval: %v, current time: %v", bootConf.Status, bootConf.Interval, bootConf.CurrentTime.String())
 }
-log.Printf("status: %v, interval: %v, current time: %v", bootConf.Status, bootConf.Interval, bootConf.CurrentTime.String())
 // ... do something with the confirmation
 ```
 
@@ -323,6 +325,180 @@ Then run the following:
 docker-compose -f example/1.6/docker-compose.tls.yml up charge-point
 ```
 
-## OCPP 2.0 Usage
+## Advanced Features
 
-Documentation will follow, once the protocol is fully implemented.
+The library offers several advanced features, especially at websocket and ocpp-j level.
+
+### Automatic message validation
+
+All incoming and outgoing messages are validated by default, using the [validator](gopkg.in/go-playground/validator) package.
+Constraints are defined on every request/response struct, as per OCPP specs.
+
+Validation may be disabled at a package level if needed:
+```go
+ocppj.SetMessageValidation(false)
+``` 
+
+Use at your own risk, as this will disable validation for all messages!
+
+> I will be evaluating the possibility to selectively disable validation for a specific message, 
+> e.g. by passing message options.
+
+### Verbose logging
+
+The `ws` and `ocppj` packages offer the possibility to enable verbose logs, via your logger of choice, e.g.:
+```go
+// Setup your own logger
+log = logrus.New()
+log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
+log.SetLevel(logrus.DebugLevel) // Debug level needed to see all logs
+// Pass own logger to ws and ocppj packages
+ws.SetLogger(log.WithField("logger", "websocket"))
+ocppj.SetLogger(log.WithField("logger", "ocppj"))
+```
+The logger you pass needs to conform to the `logging.Logger` interface.
+Commonly used logging libraries, such as zap or logrus, adhere to this interface out-of-the-box.
+
+If you are using a logger, that isn't conform, you can simply write an adapter between the `Logger` interface and your own logging system.
+
+### Websocket ping-pong
+
+The websocket package currently supports client-initiated pings only. 
+
+If your setup requires the server to be the initiator of a ping-pong (e.g. for web-based charge points),
+you may disable ping-pong entirely and just rely on the heartbeat mechanism:
+```go
+cfg := ws.NewServerTimeoutConfig()
+cfg.PingWait = 0 // this instructs the server to wait forever
+websocketServer.SetTimeoutConfig(cfg)
+```
+
+> A server-initiated ping may be supported in a future release.
+
+## OCPP 2.0.1 Usage
+
+Experimental support for version 2.0.1 is now supported!
+
+> Version 2.0 was skipped entirely, since it is considered obsolete.
+
+Requests and responses in OCPP 2.0.1 are handled the same way they were in v1.6.
+The notable change is that there are now significantly more supported messages and profiles (feature sets), 
+which also require their own handlers to be implemented.
+
+The library API to the lower websocket and ocpp-j layers remains unchanged.
+
+Below are very minimal setup code snippets, to get you started.
+CSMS is now the equivalent of the Central System,
+while the Charging Station is the new equivalent of a Charge Point.
+
+Refer to the [examples folder](example/2.0.1) for a full working example.
+More in-depth documentation for v2.0.1 will follow.
+
+**Bug reports for this version are welcome.**
+
+### CSMS
+
+To start a CSMS instance, run the following:
+```go
+import "github.com/lorenzodonini/ocpp-go/ocpp2.0.1"
+
+csms := ocpp2.NewCSMS(nil, nil)
+
+// Set callback handlers for connect/disconnect
+csms.SetNewChargingStationHandler(func(chargingStation ocpp2.ChargingStationConnection) {
+	log.Printf("new charging station %v connected", chargingStation.ID())
+})
+csms.SetChargingStationDisconnectedHandler(func(chargingStation ocpp2.ChargingStationConnection) {
+	log.Printf("charging station %v disconnected", chargingStation.ID())
+})
+
+// Set handler for profile callbacks
+handler := &CSMSHandler{}
+csms.SetAuthorizationHandler(handler)
+csms.SetAvailabilityHandler(handler)
+csms.SetDiagnosticsHandler(handler)
+csms.SetFirmwareHandler(handler)
+csms.SetLocalAuthListHandler(handler)
+csms.SetMeterHandler(handler)
+csms.SetProvisioningHandler(handler)
+csms.SetRemoteControlHandler(handler)
+csms.SetReservationHandler(handler)
+csms.SetTariffCostHandler(handler)
+csms.SetTransactionsHandler(handler)
+
+// Start central system
+listenPort := 8887
+log.Printf("starting CSMS")
+csms.Start(listenPort, "/{ws}") // This call starts server in daemon mode and is blocking
+log.Println("stopped CSMS")
+```
+
+#### Sending requests
+
+Similarly to v1.6, you may send requests using the simplified API, e.g.
+```go
+err := csms.GetLocalListVersion(chargingStationID, myCallback)
+if err != nil {
+	log.Printf("error sending message: %v", err)
+}
+```
+
+Or you may build requests manually and send them using the asynchronous API.
+
+#### Docker image
+
+There is a Dockerfile and a docker image available upstream.
+Feel free 
+
+### Charging Station
+
+To start a charging station instance, simply run the following:
+```go
+chargingStationID := "cs0001"
+csmsUrl = "ws://localhost:8887"
+chargingStation := ocpp2.NewChargingStation(chargingStationID, nil, nil)
+
+// Set a handler for all callback functions
+handler := &ChargingStationHandler{}
+chargingStation.SetAvailabilityHandler(handler)
+chargingStation.SetAuthorizationHandler(handler)
+chargingStation.SetDataHandler(handler)
+chargingStation.SetDiagnosticsHandler(handler)
+chargingStation.SetDisplayHandler(handler)
+chargingStation.SetFirmwareHandler(handler)
+chargingStation.SetISO15118Handler(handler)
+chargingStation.SetLocalAuthListHandler(handler)
+chargingStation.SetProvisioningHandler(handler)
+chargingStation.SetRemoteControlHandler(handler)
+chargingStation.SetReservationHandler(handler)
+chargingStation.SetSmartChargingHandler(handler)
+chargingStation.SetTariffCostHandler(handler)
+chargingStation.SetTransactionsHandler(handler)
+
+// Connects to CSMS
+err := chargingStation.Start(csmsUrl)
+if err != nil {
+	log.Println(err)
+} else {
+	log.Printf("connected to CSMS at %v", csmsUrl) 
+	mainRoutine() // ... your program logic goes here
+}
+
+// Disconnect
+chargingStation.Stop()
+log.Println("disconnected from CSMS")
+```
+
+#### Sending requests
+
+Similarly to v1.6 you may send requests using the simplified API (recommended), e.g.
+```go
+bootResp, err := chargingStation.BootNotification(provisioning.BootReasonPowerUp, "model1", "vendor1")
+if err != nil {
+	log.Printf("error sending message: %v", err)
+} else {
+	log.Printf("status: %v, interval: %v, current time: %v", bootResp.Status, bootResp.Interval, bootResp.CurrentTime.String())
+}
+```
+
+Or you may build requests manually and send them using either the synchronous or asynchronous API.

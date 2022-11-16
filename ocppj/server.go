@@ -34,6 +34,7 @@ type ErrorHandler func(client ws.Channel, err *ocpp.Error, details interface{})
 // a custom state handler and a list of profiles may be passed.
 //
 // You may create a simple new server by using these default values:
+//
 //	s := ocppj.NewServer(ws.NewServer(), nil, nil)
 //
 // The dispatcher's associated ClientState will be set during initialization.
@@ -135,11 +136,7 @@ func (s *Server) SendRequest(clientID string, request ocpp.Request) error {
 	if !s.dispatcher.IsRunning() {
 		return fmt.Errorf("ocppj server is not started, couldn't send request")
 	}
-	err := Validate.Struct(request)
-	if err != nil {
-		return err
-	}
-	call, err := s.CreateCall(request.(ocpp.Request))
+	call, err := s.CreateCall(request)
 	if err != nil {
 		return err
 	}
@@ -168,10 +165,6 @@ func (s *Server) SendRequest(clientID string, request ocpp.Request) error {
 //
 // - a network error occurred
 func (s *Server) SendResponse(clientID string, requestId string, response ocpp.Response) error {
-	err := Validate.Struct(response)
-	if err != nil {
-		return err
-	}
 	callResult, err := s.CreateCallResult(response, requestId)
 	if err != nil {
 		return err
@@ -198,8 +191,7 @@ func (s *Server) SendResponse(clientID string, requestId string, response ocpp.R
 //
 // - a network error occurred
 func (s *Server) SendError(clientID string, requestId string, errorCode ocpp.ErrorCode, description string, details interface{}) error {
-	callError := s.CreateCallError(requestId, errorCode, description, details)
-	err := Validate.Struct(callError)
+	callError, err := s.CreateCallError(requestId, errorCode, description, details)
 	if err != nil {
 		return err
 	}

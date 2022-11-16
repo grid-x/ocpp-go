@@ -78,8 +78,7 @@ type ClientDispatcher interface {
 
 // pendingRequest is used internally for associating metadata to a pending Request.
 type pendingRequest struct {
-	request   ocpp.Request
-	startTime time.Time
+	request ocpp.Request
 }
 
 // DefaultClientDispatcher is a default implementation of the ClientDispatcher interface.
@@ -462,18 +461,18 @@ func (d *DefaultServerDispatcher) messagePump() {
 	// Dispatcher Loop
 	for {
 		select {
-		case _ = <-d.stoppedC:
+		case <-d.stoppedC:
 			// Server was stopped
 			d.queueMap.Init()
 			log.Info("stopped processing requests")
 			return
-		case clientID, _ = <-d.requestChannel:
+		case clientID = <-d.requestChannel:
 			// Check whether there is a request queue for the specified client
 			clientQueue, ok = d.queueMap.Get(clientID)
 			if !ok {
 				// No client queue found (client was removed)
 				// Deleting and canceling the context
-				clientCtx, _ = clientContextMap[clientID]
+				clientCtx = clientContextMap[clientID]
 				delete(clientContextMap, clientID)
 				if clientCtx.ctx != nil {
 					clientCtx.cancel()
@@ -496,7 +495,7 @@ func (d *DefaultServerDispatcher) messagePump() {
 			}
 			// Canceling timeout context
 			log.Debugf("timeout for client %v, canceling message", clientID)
-			clientCtx, _ = clientContextMap[clientID]
+			clientCtx = clientContextMap[clientID]
 			if clientCtx.isActive() {
 				clientCtx.cancel()
 				clientContextMap[clientID] = clientTimeoutContext{}
@@ -515,7 +514,7 @@ func (d *DefaultServerDispatcher) messagePump() {
 		case clientID = <-d.readyForDispatch:
 			// Cancel previous timeout (if any)
 			clientCtx, ok = clientContextMap[clientID]
-			if clientCtx.isActive() {
+			if ok && clientCtx.isActive() {
 				clientCtx.cancel()
 				clientContextMap[clientID] = clientTimeoutContext{}
 			}
@@ -577,7 +576,7 @@ func (d *DefaultServerDispatcher) waitForTimeout(clientID string, clientCtx clie
 	defer clientCtx.cancel()
 	log.Debugf("started timeout timer for %s", clientID)
 	select {
-	case _, _ = <-clientCtx.ctx.Done():
+	case <-clientCtx.ctx.Done():
 		err := clientCtx.ctx.Err()
 		if err == context.DeadlineExceeded {
 			// Timeout triggered, notifying messagePump
@@ -589,7 +588,7 @@ func (d *DefaultServerDispatcher) waitForTimeout(clientID string, clientCtx clie
 		} else {
 			log.Debugf("timeout canceled for %s", clientID)
 		}
-	case _ = <-d.stoppedC:
+	case <-d.stoppedC:
 		// Server was stopped, every pending timeout gets canceled
 	}
 }

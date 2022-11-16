@@ -28,8 +28,14 @@ type Client struct {
 //
 // You may create a simple new server by using these default values:
 //	s := ocppj.NewClient(ws.NewClient(), nil, nil)
+//
+// The wsClient parameter cannot be nil. Refer to the ws package for information on how to create and
+// customize a websocket client.
 func NewClient(id string, wsClient ws.WsClient, dispatcher ClientDispatcher, stateHandler ClientState, profiles ...*ocpp.Profile) *Client {
 	endpoint := Endpoint{}
+	if wsClient == nil {
+		panic("wsClient parameter cannot be nil")
+	}
 	for _, profile := range profiles {
 		endpoint.AddProfile(profile)
 	}
@@ -38,9 +44,6 @@ func NewClient(id string, wsClient ws.WsClient, dispatcher ClientDispatcher, sta
 	}
 	if stateHandler == nil {
 		stateHandler = NewClientState()
-	}
-	if wsClient == nil {
-		wsClient = ws.NewClient()
 	}
 	dispatcher.SetNetworkClient(wsClient)
 	dispatcher.SetPendingRequestState(stateHandler)
@@ -62,17 +65,17 @@ func (c *Client) SetErrorHandler(handler func(err *ocpp.Error, details interface
 	c.errorHandler = handler
 }
 
+// Registers the handler to be called on timeout.
+func (c *Client) SetOnRequestCanceled(handler func(requestId string, request ocpp.Request, err *ocpp.Error)) {
+	c.dispatcher.SetOnRequestCanceled(handler)
+}
+
 func (c *Client) SetOnDisconnectedHandler(handler func(err error)) {
 	c.onDisconnectedHandler = handler
 }
 
 func (c *Client) SetOnReconnectedHandler(handler func()) {
 	c.onReconnectedHandler = handler
-}
-
-// Registers the handler to be called on timeout.
-func (c *Client) SetOnRequestCanceled(handler func(requestId string, request ocpp.Request, err *ocpp.Error)) {
-	c.dispatcher.SetOnRequestCanceled(handler)
 }
 
 // Connects to the given serverURL and starts running the I/O loop for the underlying connection.
@@ -122,10 +125,6 @@ func (c *Client) SendRequest(request ocpp.Request) error {
 	if !c.dispatcher.IsRunning() {
 		return fmt.Errorf("ocppj client is not started, couldn't send request")
 	}
-	err := Validate.Struct(request)
-	if err != nil {
-		return err
-	}
 	call, err := c.CreateCall(request)
 	if err != nil {
 		return err
@@ -154,10 +153,6 @@ func (c *Client) SendRequest(request ocpp.Request) error {
 //
 // - a network error occurred
 func (c *Client) SendResponse(requestId string, response ocpp.Response) error {
-	err := Validate.Struct(response)
-	if err != nil {
-		return err
-	}
 	callResult, err := c.CreateCallResult(response, requestId)
 	if err != nil {
 		return err
@@ -183,8 +178,7 @@ func (c *Client) SendResponse(requestId string, response ocpp.Response) error {
 //
 // - a network error occurred
 func (c *Client) SendError(requestId string, errorCode ocpp.ErrorCode, description string, details interface{}) error {
-	callError := c.CreateCallError(requestId, errorCode, description, details)
-	err := Validate.Struct(callError)
+	callError, err := c.CreateCallError(requestId, errorCode, description, details)
 	if err != nil {
 		return err
 	}
@@ -256,4 +250,7 @@ func (c *Client) onReconnected() {
 		c.onReconnectedHandler()
 	}
 	c.dispatcher.Resume()
+	if c.onReconnectedHandler != nil {
+		c.onReconnectedHandler()
+	}
 }

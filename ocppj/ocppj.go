@@ -17,12 +17,16 @@ import (
 // The validator, used for validating incoming/outgoing OCPP messages.
 var Validate = validator.New()
 
+// The internal validation settings. Enabled by default.
+var validationEnabled bool
+
 // The internal verbose logger
 var log logging.Logger
 
 func init() {
 	_ = Validate.RegisterValidation("errorCode", IsErrorCodeValid)
 	log = &logging.VoidLogger{}
+	validationEnabled = true
 }
 
 // Sets a custom Logger implementation, allowing the ocpp-j package to log events.
@@ -34,6 +38,18 @@ func SetLogger(logger logging.Logger) {
 		panic("cannot set a nil logger")
 	}
 	log = logger
+}
+
+// Allows to enable/disable automatic validation for OCPP messages
+// (this includes the field constraints defined for every request/response).
+// The feature may be useful when working with OCPP implementations that don't fully comply to the specs.
+//
+// Validation is enabled by default.
+//
+// ⚠️ Use at your own risk! When disabled, outgoing and incoming OCPP messages will not be validated anymore,
+// potentially leading to errors.
+func SetMessageValidation(enabled bool) {
+	validationEnabled = enabled
 }
 
 // MessageType identifies the type of message exchanged between two OCPP endpoints.
@@ -62,6 +78,7 @@ var messageIdGenerator = func() string {
 // The function is invoked automatically when creating a new Call.
 //
 // Settings this overrides the default behavior, which is:
+//
 //	fmt.Sprintf("%v", rand.Uint32())
 func SetMessageIdGenerator(generator func() string) {
 	if generator != nil {
@@ -207,11 +224,11 @@ func ocppMessageToJson(message interface{}) ([]byte, error) {
 }
 
 func getValueLength(value interface{}) int {
-	switch value.(type) {
+	switch value := value.(type) {
 	case int:
-		return value.(int)
+		return value
 	case string:
-		return len(value.(string))
+		return len(value)
 	default:
 		return 0
 	}
@@ -406,11 +423,15 @@ func (endpoint *Endpoint) ParseMessage(arr []interface{}, pendingRequestState Cl
 		}
 		rawErrorCode := arr[2].(string)
 		errorCode := ocpp.ErrorCode(rawErrorCode)
+		errorDescription := ""
+		if v, ok := arr[3].(string); ok {
+			errorDescription = v
+		}
 		callError := CallError{
 			MessageTypeId:    CALL_ERROR,
 			UniqueId:         uniqueId,
 			ErrorCode:        errorCode,
-			ErrorDescription: arr[3].(string),
+			ErrorDescription: errorDescription,
 			ErrorDetails:     details,
 		}
 		err := Validate.Struct(callError)
@@ -441,9 +462,11 @@ func (endpoint *Endpoint) CreateCall(request ocpp.Request) (*Call, error) {
 		Action:        action,
 		Payload:       request,
 	}
-	err := Validate.Struct(call)
-	if err != nil {
-		return nil, err
+	if validationEnabled {
+		err := Validate.Struct(call)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &call, nil
 }
@@ -462,15 +485,17 @@ func (endpoint *Endpoint) CreateCallResult(confirmation ocpp.Response, uniqueId 
 		UniqueId:      uniqueId,
 		Payload:       confirmation,
 	}
-	err := Validate.Struct(callResult)
-	if err != nil {
-		return nil, err
+	if validationEnabled {
+		err := Validate.Struct(callResult)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &callResult, nil
 }
 
 // Creates a CallError message, given the message's unique ID and the error.
-func (endpoint *Endpoint) CreateCallError(uniqueId string, code ocpp.ErrorCode, description string, details interface{}) *CallError {
+func (endpoint *Endpoint) CreateCallError(uniqueId string, code ocpp.ErrorCode, description string, details interface{}) (*CallError, error) {
 	callError := CallError{
 		MessageTypeId:    CALL_ERROR,
 		UniqueId:         uniqueId,
@@ -478,5 +503,11 @@ func (endpoint *Endpoint) CreateCallError(uniqueId string, code ocpp.ErrorCode, 
 		ErrorDescription: description,
 		ErrorDetails:     details,
 	}
-	return &callError
+	if validationEnabled {
+		err := Validate.Struct(callError)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &callError, nil
 }

@@ -146,6 +146,9 @@ func (websocketClient *MockWebsocketClient) Write(data []byte) error {
 func (websocketClient *MockWebsocketClient) AddOption(option interface{}) {
 }
 
+func (websocketClient *MockWebsocketClient) SetRequestedSubProtocol(subProto string) {
+}
+
 func (websocketClient *MockWebsocketClient) SetBasicAuth(username string, password string) {
 }
 
@@ -492,7 +495,8 @@ func (suite *OcppJTestSuite) TestCreateCallError() {
 		DetailString string
 	}
 	mockDetails := MockDetails{DetailString: mockDetailString}
-	callError := suite.chargePoint.CreateCallError(mockUniqueId, ocppj.GenericError, mockDescription, mockDetails)
+	callError, err := suite.chargePoint.CreateCallError(mockUniqueId, ocppj.GenericError, mockDescription, mockDetails)
+	assert.Nil(t, err)
 	assert.NotNil(t, callError)
 	CheckCallError(t, callError, mockUniqueId, ocppj.GenericError, mockDescription, mockDetails)
 }

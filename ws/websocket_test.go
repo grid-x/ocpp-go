@@ -10,7 +10,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"io/ioutil"
 	"math/big"
 	"net"
 	"net/http"
@@ -31,6 +30,8 @@ const (
 	serverPort = 8887
 	serverPath = "/ws/{id}"
 	testPath   = "/ws/testws"
+	// Default sub-protocol to send to peer upon connection.
+	defaultSubProtocol = "ocpp1.6"
 )
 
 func newWebsocketServer(t *testing.T, onMessage func(data []byte) ([]byte, error)) *Server {
@@ -53,9 +54,7 @@ func newWebsocketServer(t *testing.T, onMessage func(data []byte) ([]byte, error
 
 func newWebsocketClient(t *testing.T, onMessage func(data []byte) ([]byte, error)) *Client {
 	wsClient := NewClient()
-	wsClient.AddOption(func(dialer *websocket.Dialer) {
-		dialer.Subprotocols = append(dialer.Subprotocols, defaultSubProtocol)
-	})
+	wsClient.SetRequestedSubProtocol(defaultSubProtocol)
 	wsClient.SetMessageHandler(func(data []byte) error {
 		assert.NotNil(t, data)
 		if onMessage != nil {
@@ -142,11 +141,11 @@ func TestWebsocketEcho(t *testing.T) {
 	// Start flow routine
 	go func() {
 		// Wait for messages to be exchanged, then close connection
-		sig, _ := <-triggerC
+		sig := <-triggerC
 		assert.True(t, sig)
 		err := wsServer.Write(path.Base(testPath), message)
 		require.Nil(t, err)
-		sig, _ = <-triggerC
+		sig = <-triggerC
 		assert.True(t, sig)
 		wsClient.Stop()
 	}()
@@ -206,7 +205,7 @@ func TestTLSWebsocketEcho(t *testing.T) {
 	})
 	wsClient.AddOption(func(dialer *websocket.Dialer) {
 		certPool := x509.NewCertPool()
-		data, err := ioutil.ReadFile(certFilename)
+		data, err := os.ReadFile(certFilename)
 		assert.Nil(t, err)
 		ok := certPool.AppendCertsFromPEM(data)
 		assert.True(t, ok)
@@ -220,11 +219,11 @@ func TestTLSWebsocketEcho(t *testing.T) {
 	// Start flow routine
 	go func() {
 		// Wait for messages to be exchanged, then close connection
-		sig, _ := <-triggerC
+		sig := <-triggerC
 		assert.True(t, sig)
 		err := wsServer.Write(path.Base(testPath), message)
 		require.NoError(t, err)
-		sig, _ = <-triggerC
+		sig = <-triggerC
 		assert.True(t, sig)
 		wsClient.Stop()
 	}()
@@ -265,7 +264,7 @@ func TestServerStartErrors(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	// Starting server again throws error
 	wsServer.Start(serverPort, serverPath)
-	r, _ := <-triggerC
+	r := <-triggerC
 	require.True(t, r)
 	wsServer.Stop()
 }
@@ -507,16 +506,14 @@ func TestValidBasicAuth(t *testing.T) {
 
 	// Create TLS client
 	certPool := x509.NewCertPool()
-	data, err := ioutil.ReadFile(certFilename)
+	data, err := os.ReadFile(certFilename)
 	require.Nil(t, err)
 	ok := certPool.AppendCertsFromPEM(data)
 	require.True(t, ok)
 	wsClient := NewTLSClient(&tls.Config{
 		RootCAs: certPool,
 	})
-	wsClient.AddOption(func(dialer *websocket.Dialer) {
-		dialer.Subprotocols = append(dialer.Subprotocols, defaultSubProtocol)
-	})
+	wsClient.SetRequestedSubProtocol(defaultSubProtocol)
 	// Add basic auth
 	wsClient.SetBasicAuth(authUsername, authPassword)
 	// Test connection
@@ -560,7 +557,7 @@ func TestInvalidBasicAuth(t *testing.T) {
 
 	// Create TLS client
 	certPool := x509.NewCertPool()
-	data, err := ioutil.ReadFile(certFilename)
+	data, err := os.ReadFile(certFilename)
 	require.Nil(t, err)
 	ok := certPool.AppendCertsFromPEM(data)
 	require.True(t, ok)
@@ -685,7 +682,7 @@ func TestValidClientTLSCertificate(t *testing.T) {
 
 	// Create TLS server with self-signed certificate
 	certPool := x509.NewCertPool()
-	data, err := ioutil.ReadFile(clientCertFilename)
+	data, err := os.ReadFile(clientCertFilename)
 	require.Nil(t, err)
 	ok := certPool.AppendCertsFromPEM(data)
 	require.True(t, ok)
@@ -704,7 +701,7 @@ func TestValidClientTLSCertificate(t *testing.T) {
 
 	// Create TLS client
 	certPool = x509.NewCertPool()
-	data, err = ioutil.ReadFile(serverCertFilename)
+	data, err = os.ReadFile(serverCertFilename)
 	require.Nil(t, err)
 	ok = certPool.AppendCertsFromPEM(data)
 	require.True(t, ok)
@@ -714,9 +711,7 @@ func TestValidClientTLSCertificate(t *testing.T) {
 		RootCAs:      certPool,
 		Certificates: []tls.Certificate{loadedCert},
 	})
-	wsClient.AddOption(func(dialer *websocket.Dialer) {
-		dialer.Subprotocols = append(dialer.Subprotocols, defaultSubProtocol)
-	})
+	wsClient.SetRequestedSubProtocol(defaultSubProtocol)
 	// Test connection
 	host := fmt.Sprintf("localhost:%v", serverPort)
 	u := url.URL{Scheme: "wss", Host: host, Path: testPath}
@@ -745,7 +740,7 @@ func TestInvalidClientTLSCertificate(t *testing.T) {
 
 	// Create TLS server with self-signed certificate
 	certPool := x509.NewCertPool()
-	data, err := ioutil.ReadFile(serverCertFilename)
+	data, err := os.ReadFile(serverCertFilename)
 	require.Nil(t, err)
 	ok := certPool.AppendCertsFromPEM(data)
 	require.True(t, ok)
@@ -764,7 +759,7 @@ func TestInvalidClientTLSCertificate(t *testing.T) {
 
 	// Create TLS client
 	certPool = x509.NewCertPool()
-	data, err = ioutil.ReadFile(serverCertFilename)
+	data, err = os.ReadFile(serverCertFilename)
 	require.Nil(t, err)
 	ok = certPool.AppendCertsFromPEM(data)
 	require.True(t, ok)
@@ -774,9 +769,7 @@ func TestInvalidClientTLSCertificate(t *testing.T) {
 		RootCAs:      certPool,                      // Contains server certificate as allowed server CA
 		Certificates: []tls.Certificate{loadedCert}, // Contains self-signed client certificate. Will be rejected by server
 	})
-	wsClient.AddOption(func(dialer *websocket.Dialer) {
-		dialer.Subprotocols = append(dialer.Subprotocols, defaultSubProtocol)
-	})
+	wsClient.SetRequestedSubProtocol(defaultSubProtocol)
 	// Test connection
 	host := fmt.Sprintf("localhost:%v", serverPort)
 	u := url.URL{Scheme: "wss", Host: host, Path: testPath}
@@ -789,7 +782,7 @@ func TestInvalidClientTLSCertificate(t *testing.T) {
 	wsServer.Stop()
 }
 
-func TestUnsupportedSubprotocol(t *testing.T) {
+func TestUnsupportedSubProtocol(t *testing.T) {
 	wsServer := newWebsocketServer(t, nil)
 	wsServer.SetNewClientHandler(func(ws Channel) {
 	})
@@ -931,7 +924,7 @@ func TestServerErrors(t *testing.T) {
 				if ok {
 					assert.Error(t, err)
 				}
-			case _, _ = <-finishC:
+			case <-finishC:
 				return
 			}
 		}
@@ -942,7 +935,7 @@ func TestServerErrors(t *testing.T) {
 	// Will trigger an out-of-bound error
 	time.Sleep(50 * time.Millisecond)
 	wsServer.Stop()
-	r, _ := <-triggerC
+	r := <-triggerC
 	assert.True(t, r)
 	// Start server for real
 	wsServer.httpServer = &http.Server{}
@@ -955,12 +948,12 @@ func TestServerErrors(t *testing.T) {
 	err := wsClient.Start(u.String())
 	require.NoError(t, err)
 	// Wait for new client callback
-	r, _ = <-triggerC
+	r = <-triggerC
 	require.True(t, r)
 	// Send a dummy message and expect error on server side
 	err = wsClient.Write([]byte("dummy message"))
 	require.NoError(t, err)
-	r, _ = <-triggerC
+	r = <-triggerC
 	assert.True(t, r)
 	// Send message to non-existing client
 	err = wsServer.Write("fakeId", []byte("dummy response"))
@@ -968,10 +961,10 @@ func TestServerErrors(t *testing.T) {
 	// Send unexpected close message and wait for error to be thrown
 	err = wsClient.webSocket.connection.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseUnsupportedData, ""))
 	assert.NoError(t, err)
-	r, _ = <-triggerC
+	<-triggerC
 	// Stop and wait for errors channel cleanup
 	wsServer.Stop()
-	r, _ = <-triggerC
+	r = <-triggerC
 	assert.True(t, r)
 	close(finishC)
 }
@@ -997,7 +990,7 @@ func TestClientErrors(t *testing.T) {
 				if ok {
 					assert.Error(t, err)
 				}
-			case _, _ = <-finishC:
+			case <-finishC:
 				return
 			}
 		}
@@ -1013,24 +1006,24 @@ func TestClientErrors(t *testing.T) {
 	err = wsClient.Start(u.String())
 	require.NoError(t, err)
 	// Wait for new client callback
-	r, _ := <-triggerC
+	r := <-triggerC
 	require.True(t, r)
 	// Send a dummy message and expect error on client side
 	err = wsServer.Write(path.Base(testPath), []byte("dummy message"))
 	require.NotNil(t, t, err)
-	r, _ = <-triggerC
+	r = <-triggerC
 	assert.True(t, r)
 	// Send unexpected close message and wait for error to be thrown
 	conn := wsServer.connections[path.Base(testPath)]
 	require.NotNil(t, conn)
 	err = conn.connection.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseUnsupportedData, ""))
 	assert.NoError(t, err)
-	r, _ = <-triggerC
+	r = <-triggerC
 	require.True(t, r)
 	// Stop server and client and wait for errors channel cleanup
 	wsServer.Stop()
 	wsClient.Stop()
-	r, _ = <-triggerC
+	r = <-triggerC
 	require.True(t, r)
 	close(finishC)
 }

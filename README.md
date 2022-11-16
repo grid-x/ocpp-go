@@ -1,3 +1,19 @@
+# Disclaimer - GridX
+We are using the OCPP-GO library developed by lorenzodonini ([lorenzodonini/ocpp-go](https://github.com/lorenzodonini/ocpp-go)).
+Since we have a few changes that are not part of the upstream library and should never be (e.g. extension for BDL), we need to work on our own branch: [gridx_extensions](https://github.com/grid-x/ocpp-go/tree/gridx_extensions)
+Every change has to be merged into this branch using a Pull Request.
+
+In order to update the dependency for the client-repo, follow those steps:
+1. Change the `replace` command in `go.mod` into:
+   ```
+   replace github.com/lorenzodonini/ocpp-go => github.com/grid-x/ocpp-go gridx_extensions
+   ```
+2. Run tidy and vendor
+   ```
+   go mod tidy
+   go mod vendor
+   ```
+
 # ocpp-go
 
 [![Build Status](https://travis-ci.org/lorenzodonini/ocpp-go.svg?branch=master)](https://travis-ci.org/lorenzodonini/ocpp-go)

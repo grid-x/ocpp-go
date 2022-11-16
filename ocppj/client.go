@@ -65,14 +65,6 @@ func (c *Client) SetErrorHandler(handler func(err *ocpp.Error, details interface
 	c.errorHandler = handler
 }
 
-func (c *Client) SetOnDisconnectedHandler(handler func(err error)) {
-	c.onDisconnectedHandler = handler
-}
-
-func (c *Client) SetOnReconnectedHandler(handler func()) {
-	c.onReconnectedHandler = handler
-}
-
 // Registers the handler to be called on timeout.
 func (c *Client) SetOnRequestCanceled(handler func(requestId string, request ocpp.Request, err *ocpp.Error)) {
 	c.dispatcher.SetOnRequestCanceled(handler)

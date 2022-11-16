@@ -118,6 +118,7 @@ type WebSocket struct {
 	forceCloseC        chan error                // used by the readPump to notify a forcefully closed connection to the writePump.
 	pingMessage        chan []byte
 	tlsConnectionState *tls.ConnectionState
+	closed             chan struct{}
 }
 
 // Retrieves the unique Identifier of the websocket (typically, the URL suffix).
@@ -483,6 +484,7 @@ out:
 		forceCloseC:        make(chan error, 1),
 		pingMessage:        make(chan []byte, 1),
 		tlsConnectionState: r.TLS,
+		closed:             make(chan struct{}),
 	}
 	log.Debugf("upgraded websocket connection for %s from %s", id, conn.RemoteAddr().String())
 	// If unsupported subprotocol, terminate the connection immediately
@@ -1040,7 +1042,7 @@ func (client *Client) Start(urlStr string) error {
 	log.Infof("connected to server as %s", id)
 	client.reconnectC = make(chan struct{})
 	client.setConnected(true)
-	//Start reader and write routine
+	// Start reader and write routine
 	go client.writePump()
 	go client.readPump()
 	return nil

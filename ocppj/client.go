@@ -250,7 +250,4 @@ func (c *Client) onReconnected() {
 		c.onReconnectedHandler()
 	}
 	c.dispatcher.Resume()
-	if c.onReconnectedHandler != nil {
-		c.onReconnectedHandler()
-	}
 }

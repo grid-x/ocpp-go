@@ -2,6 +2,7 @@ package ocpp16_test
 
 import (
 	"fmt"
+
 	"github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -13,7 +14,7 @@ func (suite *OcppV16TestSuite) TestChangeConfigurationRequestValidation() {
 	t := suite.T()
 	var requestTable = []GenericTestEntry{
 		{core.ChangeConfigurationRequest{Key: "someKey", Value: "someValue"}, true},
-		{core.ChangeConfigurationRequest{Key: "someKey"}, false},
+		{core.ChangeConfigurationRequest{Key: "someKey", Value: ""}, true},
 		{core.ChangeConfigurationRequest{Value: "someValue"}, false},
 		{core.ChangeConfigurationRequest{}, false},
 		{core.ChangeConfigurationRequest{Key: ">50................................................", Value: "someValue"}, false},

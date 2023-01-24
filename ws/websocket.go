@@ -331,7 +331,12 @@ func (server *Server) SetCheckOriginHandler(handler func(r *http.Request) bool) 
 func (server *Server) error(err error) {
 	log.Error(err)
 	if server.errC != nil {
-		server.errC <- err
+		select {
+		case <-server.errC:
+			log.Debug("servers errC is closed, so we can't send the error!")
+		default:
+			server.errC <- err
+		}
 	}
 }
 

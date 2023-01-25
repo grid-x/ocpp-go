@@ -598,6 +598,10 @@ func (d *DefaultServerDispatcher) dispatchNextRequest(clientID string) (clientCt
 		return
 	}
 	el := q.Peek()
+	if el == nil {
+		log.Errorf("queue for %s is empty, won't dispatch.", clientID)
+		return
+	}
 	bundle, _ := el.(RequestBundle)
 	jsonMessage := bundle.Data
 	callID := bundle.Call.GetUniqueId()

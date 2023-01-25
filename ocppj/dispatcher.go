@@ -341,6 +341,11 @@ type ServerDispatcher interface {
 	DeleteClient(clientID string)
 }
 
+type disconnectInfo struct {
+	clientID string
+	queue    RequestQueue
+}
+
 // DefaultServerDispatcher is a default implementation of the ServerDispatcher interface.
 //
 // The dispatcher implements the ClientState as well for simplicity.
@@ -354,6 +359,7 @@ type DefaultServerDispatcher struct {
 	timerC              chan string
 	running             bool
 	stoppedC            chan struct{}
+	onDisconnect        chan disconnectInfo
 	onRequestCancel     CanceledRequestHandler
 	network             ws.WsServer
 	mutex               sync.RWMutex
@@ -379,6 +385,7 @@ func NewDefaultServerDispatcher(queueMap ServerQueueMap) *DefaultServerDispatche
 		requestChannel:   nil,
 		readyForDispatch: make(chan string, 1),
 		timeout:          defaultMessageTimeout,
+		onDisconnect:     make(chan disconnectInfo, 1),
 	}
 	d.pendingRequestState = NewServerState(&d.mutex)
 	return d
@@ -416,9 +423,15 @@ func (d *DefaultServerDispatcher) CreateClient(clientID string) {
 }
 
 func (d *DefaultServerDispatcher) DeleteClient(clientID string) {
+	q, _ := d.queueMap.Get(clientID)
+
+	// Remove from queue and signal to messagePump that this client does not exist anymore
 	d.queueMap.Remove(clientID)
-	if d.IsRunning() {
-		d.requestChannel <- clientID
+	if d.IsRunning() && q != nil {
+		d.onDisconnect <- disconnectInfo{
+			clientID: clientID,
+			queue:    q,
+		}
 	}
 }
 
@@ -466,6 +479,43 @@ func (d *DefaultServerDispatcher) messagePump() {
 			d.queueMap.Init()
 			log.Info("stopped processing requests")
 			return
+		case disconnectInfo := <-d.onDisconnect:
+			q := disconnectInfo.queue
+			clientID := disconnectInfo.clientID
+
+			log.Infof("client %s disconnected.", clientID)
+
+			if !q.IsEmpty() {
+				// Clear the queue
+				for {
+					if q.IsEmpty() {
+						break
+					}
+					// Removing request and triggering cancel callback
+					bundle, _ := q.Pop().(RequestBundle)
+					callID := bundle.Call.GetUniqueId()
+
+					d.pendingRequestState.DeletePendingRequest(clientID, callID)
+
+					if d.onRequestCancel != nil {
+						d.onRequestCancel(clientID, bundle.Call.UniqueId, bundle.Call.Payload,
+							ocpp.NewError(GenericError, "clear pending request due to a disconnect", bundle.Call.UniqueId))
+					}
+				}
+			}
+
+			// Deleting and canceling the context
+			clientCtx = clientContextMap[clientID]
+			delete(clientContextMap, clientID)
+			if clientCtx.ctx != nil {
+				clientCtx.cancel()
+			}
+
+			// Be ready for the next request again
+			clientQueue = nil
+			rdy = true
+
+			continue
 		case clientID = <-d.requestChannel:
 			// Check whether there is a request queue for the specified client
 			clientQueue, ok = d.queueMap.Get(clientID)

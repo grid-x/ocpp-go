@@ -2,6 +2,7 @@ package ocpp16
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/lorenzodonini/ocpp-go/internal/callbackqueue"
 	"github.com/lorenzodonini/ocpp-go/ocpp"
@@ -26,6 +27,7 @@ type centralSystem struct {
 	smartChargingHandler smartcharging.CentralSystemHandler
 	callbackQueue        callbackqueue.CallbackQueue
 	errC                 chan error
+	errCLock             sync.Mutex
 }
 
 func newCentralSystem(server *ocppj.Server) centralSystem {
@@ -40,7 +42,18 @@ func newCentralSystem(server *ocppj.Server) centralSystem {
 
 func (cs *centralSystem) error(err error) {
 	if cs.errC != nil {
-		cs.errC <- err
+		// It can happen that the error channel is getting closed
+		// when the central system is shutting down.
+		// If this happens right before this call here, we have a closed channel.
+		// To prevent a panic, we check if it is closed before sending the error.
+		cs.errCLock.Lock()
+		defer cs.errCLock.Unlock()
+		select {
+		case <-cs.errC:
+			// channel is closed, don't send the error
+		default:
+			cs.errC <- err
+		}
 	}
 }
 
@@ -400,6 +413,14 @@ func (cs *centralSystem) SendRequestAsync(clientId string, request ocpp.Request,
 
 func (cs *centralSystem) Start(listenPort int, listenPath string) {
 	cs.server.Start(listenPort, listenPath)
+
+	// Make sure to lock the access to the error channel to prevent races/panics
+	// When an error happens right after the server is shutting down.
+	if cs.errC != nil {
+		cs.errCLock.Lock()
+		defer cs.errCLock.Unlock()
+		close(cs.errC)
+	}
 }
 
 func (cs *centralSystem) sendResponse(chargePointId string, confirmation ocpp.Response, err error, requestId string) {

@@ -1,8 +1,9 @@
 package core
 
 import (
-	"github.com/lorenzodonini/ocpp-go/ocpp1.6/types"
 	"reflect"
+
+	"github.com/lorenzodonini/ocpp-go/ocpp1.6/types"
 )
 
 // -------------------- Authorize (CP -> CS) --------------------
@@ -11,7 +12,7 @@ const AuthorizeFeatureName = "Authorize"
 
 // The field definition of the Authorize request payload sent by the Charge Point to the Central System.
 type AuthorizeRequest struct {
-	IdTag string `json:"idTag" validate:"required,max=20"`
+	IdTag string `json:"idTag" validate:"omitempty,max=20"`
 }
 
 // This field definition of the Authorize confirmation payload, sent by the Charge Point to the Central System in response to an AuthorizeRequest.

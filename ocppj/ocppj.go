@@ -2,6 +2,7 @@
 package ocppj
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -23,6 +24,8 @@ var validationEnabled bool
 // The internal verbose logger
 var log logging.Logger
 
+var EscapeHTML = true
+
 func init() {
 	_ = Validate.RegisterValidation("errorCode", IsErrorCodeValid)
 	log = &logging.VoidLogger{}
@@ -38,6 +41,12 @@ func SetLogger(logger logging.Logger) {
 		panic("cannot set a nil logger")
 	}
 	log = logger
+}
+
+// Allows an instance of ocppj to configure if the message is Marshaled by escaping special caracters like "<", ">", "&" etc
+// For more info https://pkg.go.dev/encoding/json#HTMLEscape
+func SetHTMLEscape(flag bool) {
+	EscapeHTML = flag
 }
 
 // Allows to enable/disable automatic validation for OCPP messages
@@ -111,7 +120,7 @@ func (call *Call) MarshalJSON() ([]byte, error) {
 	fields[1] = call.UniqueId
 	fields[2] = call.Action
 	fields[3] = call.Payload
-	return json.Marshal(fields)
+	return jsonMarshal(fields)
 }
 
 // -------------------- Call Result --------------------
@@ -137,7 +146,7 @@ func (callResult *CallResult) MarshalJSON() ([]byte, error) {
 	fields[0] = int(callResult.MessageTypeId)
 	fields[1] = callResult.UniqueId
 	fields[2] = callResult.Payload
-	return json.Marshal(fields)
+	return jsonMarshal(fields)
 }
 
 // -------------------- Call Error --------------------
@@ -148,7 +157,7 @@ type CallError struct {
 	MessageTypeId    MessageType    `json:"messageTypeId" validate:"required,eq=4"`
 	UniqueId         string         `json:"uniqueId" validate:"required,max=36"`
 	ErrorCode        ocpp.ErrorCode `json:"errorCode" validate:"errorCode"`
-	ErrorDescription string         `json:"errorDescription" validate:"required"`
+	ErrorDescription string         `json:"errorDescription" validate:"omitempty"`
 	ErrorDetails     interface{}    `json:"errorDetails" validate:"omitempty"`
 }
 
@@ -166,7 +175,11 @@ func (callError *CallError) MarshalJSON() ([]byte, error) {
 	fields[1] = callError.UniqueId
 	fields[2] = callError.ErrorCode
 	fields[3] = callError.ErrorDescription
-	fields[4] = callError.ErrorDetails
+	if callError.ErrorDetails == nil {
+		fields[4] = struct{}{}
+	} else {
+		fields[4] = callError.ErrorDetails
+	}
 	return ocppMessageToJson(fields)
 }
 
@@ -177,11 +190,16 @@ const (
 	MessageTypeNotSupported       ocpp.ErrorCode = "MessageTypeNotSupported"       // A message with an Message Type Number received that is not supported by this implementation.
 	ProtocolError                 ocpp.ErrorCode = "ProtocolError"                 // Payload for Action is incomplete.
 	SecurityError                 ocpp.ErrorCode = "SecurityError"                 // During the processing of Action a security issue occurred preventing receiver from completing the Action successfully.
-	FormationViolation            ocpp.ErrorCode = "FormationViolation"            // Payload for Action is syntactically incorrect or not conform the PDU structure for Action.
 	PropertyConstraintViolation   ocpp.ErrorCode = "PropertyConstraintViolation"   // Payload is syntactically correct but at least one field contains an invalid value.
 	OccurrenceConstraintViolation ocpp.ErrorCode = "OccurrenceConstraintViolation" // Payload for Action is syntactically correct but at least one of the fields violates occurrence constraints.
 	TypeConstraintViolation       ocpp.ErrorCode = "TypeConstraintViolation"       // Payload for Action is syntactically correct but at least one of the fields violates data type constraints (e.g. “somestring”: 12).
 	GenericError                  ocpp.ErrorCode = "GenericError"                  // Any other error not covered by the previous ones.
+	FormatViolationV2             ocpp.ErrorCode = "FormatViolation"               // Payload for Action is syntactically incorrect. This is only valid for OCPP 2.0.1
+	FormatViolationV16            ocpp.ErrorCode = "FormationViolation"            // Payload for Action is syntactically incorrect or not conform the PDU structure for Action. This is only valid for OCPP 1.6
+)
+
+var (
+	FormationViolation = FormatViolationV16 // Used as constant, but can be overwritten depending on protocol version. Sett FormatViolationV16 and FormatViolationV2.
 )
 
 func IsErrorCodeValid(fl validator.FieldLevel) bool {
@@ -214,7 +232,7 @@ func ParseJsonMessage(dataJson string) ([]interface{}, error) {
 }
 
 func ocppMessageToJson(message interface{}) ([]byte, error) {
-	jsonData, err := json.Marshal(message)
+	jsonData, err := jsonMarshal(message)
 	if err != nil {
 		return nil, err
 	}
@@ -274,6 +292,15 @@ func errorFromValidation(validationErrors validator.ValidationErrors, messageId 
 		}
 	}
 	return ocpp.NewError(GenericError, fmt.Sprintf("%v", validationErrors.Error()), messageId)
+}
+
+// Marshals data by manipulating EscapeHTML property of encoder
+func jsonMarshal(t interface{}) ([]byte, error) {
+	buffer := &bytes.Buffer{}
+	encoder := json.NewEncoder(buffer)
+	encoder.SetEscapeHTML(EscapeHTML)
+	err := encoder.Encode(t)
+	return bytes.TrimRight(buffer.Bytes(), "\n"), err
 }
 
 // -------------------- Endpoint --------------------
@@ -367,7 +394,11 @@ func (endpoint *Endpoint) ParseMessage(arr []interface{}, pendingRequestState Cl
 		if len(arr) != 4 {
 			return nil, ocpp.NewError(FormationViolation, "Invalid Call message. Expected array length 4", uniqueId)
 		}
-		action := arr[2].(string)
+		action, ok := arr[2].(string)
+		if !ok {
+			return nil, ocpp.NewError(FormationViolation, fmt.Sprintf("Invalid element %v at 2, expected action (string)", arr[2]), "")
+		}
+
 		profile, ok := endpoint.GetProfileForFeature(action)
 		if !ok {
 			return nil, ocpp.NewError(NotSupported, fmt.Sprintf("Unsupported feature %v", action), uniqueId)
@@ -421,7 +452,10 @@ func (endpoint *Endpoint) ParseMessage(arr []interface{}, pendingRequestState Cl
 		if len(arr) > 4 {
 			details = arr[4]
 		}
-		rawErrorCode := arr[2].(string)
+		rawErrorCode, ok := arr[2].(string)
+		if !ok {
+			return nil, ocpp.NewError(FormationViolation, fmt.Sprintf("Invalid element %v at 2, expected rawErrorCode (string)", arr[2]), rawErrorCode)
+		}
 		errorCode := ocpp.ErrorCode(rawErrorCode)
 		errorDescription := ""
 		if v, ok := arr[3].(string); ok {
@@ -478,7 +512,7 @@ func (endpoint *Endpoint) CreateCallResult(confirmation ocpp.Response, uniqueId 
 	action := confirmation.GetFeatureName()
 	profile, _ := endpoint.GetProfileForFeature(action)
 	if profile == nil {
-		return nil, fmt.Errorf("Couldn't create Call Result for unsupported action %v", action)
+		return nil, ocpp.NewError(NotSupported, fmt.Sprintf("couldn't create Call Result for unsupported action %v", action), uniqueId)
 	}
 	callResult := CallResult{
 		MessageTypeId: CALL_RESULT,

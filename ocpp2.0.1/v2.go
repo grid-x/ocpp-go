@@ -34,6 +34,7 @@ type ChargingStationConnection interface {
 	TLSConnectionState() *tls.ConnectionState
 }
 
+type ChargingStationValidationHandler ws.CheckClientHandler
 type ChargingStationConnectionHandler func(chargePoint ChargingStationConnection)
 
 // -------------------- v2.0 Charging Station --------------------
@@ -165,6 +166,9 @@ type ChargingStation interface {
 	// Stops the charging station routine, disconnecting it from the CSMS.
 	// Any pending requests are discarded.
 	Stop()
+	// Returns true if the charging station is currently connected to the CSMS, false otherwise.
+	// While automatically reconnecting to the CSMS, the method returns false.
+	IsConnected() bool
 	// Errors returns a channel for error messages. If it doesn't exist it es created.
 	// The channel is closed by the charging station when stopped.
 	Errors() <-chan error
@@ -280,7 +284,7 @@ type CSMS interface {
 	// Retrieves all messages currently configured on a charging station.
 	GetDisplayMessages(clientId string, callback func(*display.GetDisplayMessagesResponse, error), requestId int, props ...func(*display.GetDisplayMessagesRequest)) error
 	// Retrieves all installed certificates on a charging station.
-	GetInstalledCertificateIds(clientId string, callback func(*iso15118.GetInstalledCertificateIdsResponse, error), typeOfCertificate types.CertificateUse, props ...func(*iso15118.GetInstalledCertificateIdsRequest)) error
+	GetInstalledCertificateIds(clientId string, callback func(*iso15118.GetInstalledCertificateIdsResponse, error), props ...func(*iso15118.GetInstalledCertificateIdsRequest)) error
 	// Queries a charging station for version number of the Local Authorization List.
 	GetLocalListVersion(clientId string, callback func(*localauth.GetLocalListVersionResponse, error), props ...func(*localauth.GetLocalListVersionRequest)) error
 	// Instructs a charging station to upload a diagnostics or security logfile to the CSMS.
@@ -298,11 +302,11 @@ type CSMS interface {
 	// Publishes a firmware to a local controller, allowing charging stations to download the same firmware from the local controller directly.
 	PublishFirmware(clientId string, callback func(*firmware.PublishFirmwareResponse, error), location string, checksum string, requestID int, props ...func(request *firmware.PublishFirmwareRequest)) error
 	// Remotely triggers a transaction to be started on a charging station.
-	RequestStartTransaction(clientId string, callback func(*remotecontrol.RequestStartTransactionResponse, error), remoteStartID int, IdToken types.IdTokenType, props ...func(request *remotecontrol.RequestStartTransactionRequest)) error
+	RequestStartTransaction(clientId string, callback func(*remotecontrol.RequestStartTransactionResponse, error), remoteStartID int, IdToken types.IdToken, props ...func(request *remotecontrol.RequestStartTransactionRequest)) error
 	// Remotely triggers an ongoing transaction to be stopped on a charging station.
 	RequestStopTransaction(clientId string, callback func(*remotecontrol.RequestStopTransactionResponse, error), transactionID string, props ...func(request *remotecontrol.RequestStopTransactionRequest)) error
 	// Attempts to reserve a connector for an EV, on a specific charging station.
-	ReserveNow(clientId string, callback func(*reservation.ReserveNowResponse, error), id int, expiryDateTime *types.DateTime, idToken types.IdTokenType, props ...func(request *reservation.ReserveNowRequest)) error
+	ReserveNow(clientId string, callback func(*reservation.ReserveNowResponse, error), id int, expiryDateTime *types.DateTime, idToken types.IdToken, props ...func(request *reservation.ReserveNowRequest)) error
 	// Instructs the Charging Station to reset itself.
 	Reset(clientId string, callback func(*provisioning.ResetResponse, error), t provisioning.ResetType, props ...func(request *provisioning.ResetRequest)) error
 	// Sends a local authorization list to a charging station, which can be used for the authorization of idTokens.
@@ -362,6 +366,8 @@ type CSMS interface {
 	SetDisplayHandler(handler display.CSMSHandler)
 	// Registers a handler for incoming data transfer messages
 	SetDataHandler(handler data.CSMSHandler)
+	// Registers a handler for new incoming Charging station connections.
+	SetNewChargingStationValidationHandler(handler ws.CheckClientHandler)
 	// Registers a handler for new incoming Charging station connections.
 	SetNewChargingStationHandler(handler ChargingStationConnectionHandler)
 	// Registers a handler for Charging station disconnections.

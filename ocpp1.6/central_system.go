@@ -2,6 +2,7 @@ package ocpp16
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/lorenzodonini/ocpp-go/internal/callbackqueue"
 	"github.com/lorenzodonini/ocpp-go/ocpp"
@@ -360,6 +361,10 @@ func (cs *centralSystem) SetSmartChargingHandler(handler smartcharging.CentralSy
 	cs.smartChargingHandler = handler
 }
 
+func (cs *centralSystem) SetNewChargingStationValidationHandler(handler ws.CheckClientHandler) {
+	cs.server.SetNewClientValidationHandler(handler)
+}
+
 func (cs *centralSystem) SetNewChargePointHandler(handler ChargePointConnectionHandler) {
 	cs.server.SetNewClientHandler(func(chargePoint ws.Channel) {
 		handler(chargePoint)
@@ -399,23 +404,30 @@ func (cs *centralSystem) SendRequestAsync(clientId string, request ocpp.Request,
 }
 
 func (cs *centralSystem) Start(listenPort int, listenPath string) {
+	// Overriding some protocol-specific values in the lower layers globally
+	ocppj.FormationViolation = ocppj.FormatViolationV16
+	// Start server
 	cs.server.Start(listenPort, listenPath)
 }
 
 func (cs *centralSystem) sendResponse(chargePointId string, confirmation ocpp.Response, err error, requestId string) {
-	// send error response
 	if err != nil {
-		cs.error(fmt.Errorf("error handling request: %w", err))
-		err := cs.server.SendError(chargePointId, requestId, ocppj.InternalError, "Error handling request", nil)
+		// Send error response
+		err = cs.server.SendError(chargePointId, requestId, ocppj.InternalError, err.Error(), nil)
 		if err != nil {
+			// Error while sending an error. Will attempt to send a default error instead
+			cs.server.HandleFailedResponseError(chargePointId, requestId, err, "")
+			// Notify client implementation
 			err = fmt.Errorf("error replying cp %s to request %s with 'internal error': %w", chargePointId, requestId, err)
 			cs.error(err)
 		}
 		return
 	}
 
-	if confirmation == nil {
+	if confirmation == nil || reflect.ValueOf(confirmation).IsNil() {
 		err = fmt.Errorf("empty confirmation to %s for request %s", chargePointId, requestId)
+		// Sending a dummy error to server instead, then notify client implementation
+		_ = cs.server.SendError(chargePointId, requestId, ocppj.GenericError, err.Error(), nil)
 		cs.error(err)
 		return
 	}
@@ -423,6 +435,9 @@ func (cs *centralSystem) sendResponse(chargePointId string, confirmation ocpp.Re
 	// send confirmation response
 	err = cs.server.SendResponse(chargePointId, requestId, confirmation)
 	if err != nil {
+		// Error while sending an error. Will attempt to send a default error instead
+		cs.server.HandleFailedResponseError(chargePointId, requestId, err, confirmation.GetFeatureName())
+		// Notify client implementation
 		err = fmt.Errorf("error replying cp %s to request %s: %w", chargePointId, requestId, err)
 		cs.error(err)
 	}
@@ -519,7 +534,8 @@ func (cs *centralSystem) handleIncomingRequest(chargePoint ChargePointConnection
 
 func (cs *centralSystem) handleIncomingConfirmation(chargePoint ChargePointConnection, confirmation ocpp.Response, requestId string) {
 	if callback, ok := cs.callbackQueue.Dequeue(chargePoint.ID()); ok {
-		callback(confirmation, nil)
+		// Execute in separate goroutine, so the caller goroutine is available
+		go callback(confirmation, nil)
 	} else {
 		err := fmt.Errorf("no handler available for call of type %v from client %s for request %s", confirmation.GetFeatureName(), chargePoint.ID(), requestId)
 		cs.error(err)
@@ -528,7 +544,8 @@ func (cs *centralSystem) handleIncomingConfirmation(chargePoint ChargePointConne
 
 func (cs *centralSystem) handleIncomingError(chargePoint ChargePointConnection, err *ocpp.Error, details interface{}) {
 	if callback, ok := cs.callbackQueue.Dequeue(chargePoint.ID()); ok {
-		callback(nil, err)
+		// Execute in separate goroutine, so the caller goroutine is available
+		go callback(nil, err)
 	} else {
 		err := fmt.Errorf("no handler available for call error %w from client %s", err, chargePoint.ID())
 		cs.error(err)
@@ -537,7 +554,8 @@ func (cs *centralSystem) handleIncomingError(chargePoint ChargePointConnection, 
 
 func (cs *centralSystem) handleCanceledRequest(chargePointID string, request ocpp.Request, err *ocpp.Error) {
 	if callback, ok := cs.callbackQueue.Dequeue(chargePointID); ok {
-		callback(nil, err)
+		// Execute in separate goroutine, so the caller goroutine is available
+		go callback(nil, err)
 	} else {
 		err := fmt.Errorf("no handler available for canceled request %s for client %s: %w",
 			request.GetFeatureName(), chargePointID, err)

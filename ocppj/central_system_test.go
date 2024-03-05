@@ -92,7 +92,7 @@ func (suite *OcppJTestSuite) TestCentralSystemSendRequestNoValidation() {
 	assert.Nil(suite.T(), err)
 }
 
-func (suite *OcppJTestSuite) TestServerSendInvalidJsonRequest() {
+func (suite *OcppJTestSuite) TestCentralSystemSendInvalidJsonRequest() {
 	mockChargePointId := "1234"
 	suite.mockServer.On("Start", mock.AnythingOfType("int"), mock.AnythingOfType("string")).Return(nil)
 	suite.mockServer.On("Write", mockChargePointId, mock.Anything).Return(nil)
@@ -103,6 +103,65 @@ func (suite *OcppJTestSuite) TestServerSendInvalidJsonRequest() {
 	err := suite.centralSystem.SendRequest(mockChargePointId, mockRequest)
 	require.Error(suite.T(), err)
 	assert.IsType(suite.T(), &json.UnsupportedTypeError{}, err)
+}
+
+func (suite *OcppJTestSuite) TestCentralSystemInvalidMessageHook() {
+	t := suite.T()
+	mockChargePointId := "1234"
+	mockChargePoint := NewMockWebSocket(mockChargePointId)
+	// Prepare invalid payload
+	mockID := "1234"
+	mockPayload := map[string]interface{}{
+		"mockValue": float64(1234),
+	}
+	serializedPayload, err := json.Marshal(mockPayload)
+	require.NoError(t, err)
+	invalidMessage := fmt.Sprintf("[2,\"%v\",\"%s\",%v]", mockID, MockFeatureName, string(serializedPayload))
+	expectedError := fmt.Sprintf("[4,\"%v\",\"%v\",\"%v\",{}]", mockID, ocppj.FormationViolation, "json: cannot unmarshal number into Go struct field MockRequest.mockValue of type string")
+	writeHook := suite.mockServer.On("Write", mockChargePointId, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		data := args.Get(1).([]byte)
+		assert.Equal(t, expectedError, string(data))
+	})
+	suite.mockServer.On("Start", mock.AnythingOfType("int"), mock.AnythingOfType("string")).Return(nil)
+	// Setup hook 1
+	suite.centralSystem.SetInvalidMessageHook(func(client ws.Channel, err *ocpp.Error, rawMessage string, parsedFields []interface{}) *ocpp.Error {
+		assert.Equal(t, mockChargePoint.ID(), client.ID())
+		// Verify the correct fields are passed to the hook. Content is very low-level, since parsing failed
+		assert.Equal(t, float64(ocppj.CALL), parsedFields[0])
+		assert.Equal(t, mockID, parsedFields[1])
+		assert.Equal(t, MockFeatureName, parsedFields[2])
+		assert.Equal(t, mockPayload, parsedFields[3])
+		return nil
+	})
+	suite.centralSystem.Start(8887, "/{ws}")
+	// Trigger incoming invalid CALL
+	err = suite.mockServer.MessageHandler(mockChargePoint, []byte(invalidMessage))
+	ocppErr, ok := err.(*ocpp.Error)
+	require.True(t, ok)
+	assert.Equal(t, ocppj.FormationViolation, ocppErr.Code)
+	// Setup hook 2
+	mockError := ocpp.NewError(ocppj.InternalError, "custom error", mockID)
+	expectedError = fmt.Sprintf("[4,\"%v\",\"%v\",\"%v\",{}]", mockError.MessageId, mockError.Code, mockError.Description)
+	writeHook.Run(func(args mock.Arguments) {
+		data := args.Get(1).([]byte)
+		assert.Equal(t, expectedError, string(data))
+	})
+	suite.centralSystem.SetInvalidMessageHook(func(client ws.Channel, err *ocpp.Error, rawMessage string, parsedFields []interface{}) *ocpp.Error {
+		assert.Equal(t, mockChargePoint.ID(), client.ID())
+		// Verify the correct fields are passed to the hook. Content is very low-level, since parsing failed
+		assert.Equal(t, float64(ocppj.CALL), parsedFields[0])
+		assert.Equal(t, mockID, parsedFields[1])
+		assert.Equal(t, MockFeatureName, parsedFields[2])
+		assert.Equal(t, mockPayload, parsedFields[3])
+		return mockError
+	})
+	// Trigger incoming invalid CALL that returns custom error
+	err = suite.mockServer.MessageHandler(mockChargePoint, []byte(invalidMessage))
+	ocppErr, ok = err.(*ocpp.Error)
+	require.True(t, ok)
+	assert.Equal(t, mockError.Code, ocppErr.Code)
+	assert.Equal(t, mockError.Description, ocppErr.Description)
+	assert.Equal(t, mockError.MessageId, ocppErr.MessageId)
 }
 
 func (suite *OcppJTestSuite) TestServerSendInvalidCall() {
@@ -203,7 +262,8 @@ func (suite *OcppJTestSuite) TestCentralSystemSendConfirmationFailed() {
 	mockConfirmation := newMockConfirmation("mockValue")
 	err := suite.centralSystem.SendResponse(mockChargePointId, mockUniqueId, mockConfirmation)
 	assert.NotNil(t, err)
-	assert.Equal(t, "networkError", err.Error())
+	expectedErr := fmt.Sprintf("ocpp message (%v): GenericError - networkError", mockUniqueId)
+	assert.ErrorContains(t, err, expectedErr)
 }
 
 // SendError
@@ -244,9 +304,85 @@ func (suite *OcppJTestSuite) TestCentralSystemSendErrorFailed() {
 	mockConfirmation := newMockConfirmation("mockValue")
 	err := suite.centralSystem.SendResponse(mockChargePointId, mockUniqueId, mockConfirmation)
 	assert.NotNil(t, err)
+	expectedErr := fmt.Sprintf("ocpp message (%v): GenericError - networkError", mockUniqueId)
+	assert.ErrorContains(t, err, expectedErr)
 }
 
-// Handlers
+func (suite *OcppJTestSuite) TestCentralSystemHandleFailedResponse() {
+	t := suite.T()
+	msgC := make(chan []byte, 1)
+	mockChargePointID := "0101"
+	mockUniqueID := "1234"
+	suite.mockServer.On("Start", mock.AnythingOfType("int"), mock.AnythingOfType("string")).Return(nil)
+	suite.mockServer.On("Write", mock.AnythingOfType("string"), mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		data, ok := args.Get(1).([]byte)
+		require.True(t, ok)
+		msgC <- data
+	})
+	suite.centralSystem.Start(8887, "/{ws}")
+	suite.serverDispatcher.CreateClient(mockChargePointID)
+	var callResult *ocppj.CallResult
+	var callError *ocppj.CallError
+	var err error
+	// 1. occurrence validation error
+	mockField := "CallResult.Payload.MockValue"
+	mockResponse := newMockConfirmation("")
+	callResult, err = suite.centralSystem.CreateCallResult(mockResponse, mockUniqueID)
+	require.Error(t, err)
+	require.Nil(t, callResult)
+	suite.centralSystem.HandleFailedResponseError(mockChargePointID, mockUniqueID, err, mockResponse.GetFeatureName())
+	rawResponse := <-msgC
+	expectedErr := fmt.Sprintf(`[4,"%v","%v","Field %s required but not found for feature %s",{}]`, mockUniqueID, ocppj.OccurrenceConstraintViolation, mockField, mockResponse.GetFeatureName())
+	assert.Equal(t, expectedErr, string(rawResponse))
+	// 2. property constraint validation error
+	val := "len4"
+	minParamLength := "5"
+	mockResponse = newMockConfirmation(val)
+	callResult, err = suite.centralSystem.CreateCallResult(mockResponse, mockUniqueID)
+	require.Error(t, err)
+	require.Nil(t, callResult)
+	suite.centralSystem.HandleFailedResponseError(mockChargePointID, mockUniqueID, err, mockResponse.GetFeatureName())
+	rawResponse = <-msgC
+	expectedErr = fmt.Sprintf(`[4,"%v","%v","Field %s must be minimum %s, but was %d for feature %s",{}]`,
+		mockUniqueID, ocppj.PropertyConstraintViolation, mockField, minParamLength, len(val), mockResponse.GetFeatureName())
+	assert.Equal(t, expectedErr, string(rawResponse))
+	// 3. profile not supported
+	mockUnsupportedResponse := &MockUnsupportedResponse{MockValue: "someValue"}
+	callResult, err = suite.centralSystem.CreateCallResult(mockUnsupportedResponse, mockUniqueID)
+	require.Error(t, err)
+	require.Nil(t, callResult)
+	suite.centralSystem.HandleFailedResponseError(mockChargePointID, mockUniqueID, err, mockUnsupportedResponse.GetFeatureName())
+	rawResponse = <-msgC
+	expectedErr = fmt.Sprintf(`[4,"%v","%v","couldn't create Call Result for unsupported action %s",{}]`,
+		mockUniqueID, ocppj.NotSupported, mockUnsupportedResponse.GetFeatureName())
+	assert.Equal(t, expectedErr, string(rawResponse))
+	// 4. ocpp error validation failed
+	invalidErrorCode := "InvalidErrorCode"
+	callError, err = suite.centralSystem.CreateCallError(mockUniqueID, ocpp.ErrorCode(invalidErrorCode), "", nil)
+	require.Error(t, err)
+	require.Nil(t, callError)
+	suite.centralSystem.HandleFailedResponseError(mockChargePointID, mockUniqueID, err, "")
+	rawResponse = <-msgC
+	expectedErr = fmt.Sprintf(`[4,"%v","%v","Key: 'CallError.ErrorCode' Error:Field validation for 'ErrorCode' failed on the 'errorCode' tag",{}]`,
+		mockUniqueID, ocppj.GenericError)
+	assert.Equal(t, expectedErr, string(rawResponse))
+	// 5. marshaling err
+	err = suite.centralSystem.SendError(mockChargePointID, mockUniqueID, ocppj.SecurityError, "", make(chan struct{}))
+	require.Error(t, err)
+	suite.centralSystem.HandleFailedResponseError(mockChargePointID, mockUniqueID, err, "")
+	rawResponse = <-msgC
+	expectedErr = fmt.Sprintf(`[4,"%v","%v","json: unsupported type: chan struct {}",{}]`, mockUniqueID, ocppj.GenericError)
+	assert.Equal(t, expectedErr, string(rawResponse))
+	// 6. network error
+	rawErr := fmt.Sprintf("couldn't write to websocket. No socket with id %s is open", mockChargePointID)
+	err = ocpp.NewError(ocppj.GenericError, rawErr, mockUniqueID)
+	suite.centralSystem.HandleFailedResponseError(mockChargePointID, mockUniqueID, err, "")
+	rawResponse = <-msgC
+	expectedErr = fmt.Sprintf(`[4,"%v","%v","%s",{}]`, mockUniqueID, ocppj.GenericError, rawErr)
+	assert.Equal(t, expectedErr, string(rawResponse))
+}
+
+// ----------------- Handlers tests -----------------
 
 func (suite *OcppJTestSuite) TestCentralSystemNewClientHandler() {
 	t := suite.T()

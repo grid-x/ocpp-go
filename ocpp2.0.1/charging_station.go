@@ -2,6 +2,7 @@ package ocpp2
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/lorenzodonini/ocpp-go/internal/callbackqueue"
 	"github.com/lorenzodonini/ocpp-go/ocpp"
@@ -555,32 +556,45 @@ func (cs *chargingStation) asyncCallbackHandler() {
 }
 
 func (cs *chargingStation) sendResponse(response ocpp.Response, err error, requestId string) {
-	// send error response
 	if err != nil {
-		err = cs.client.SendError(requestId, ocppj.ProtocolError, err.Error(), nil)
+		// Send error response
+		err = cs.client.SendError(requestId, ocppj.InternalError, err.Error(), nil)
 		if err != nil {
-			cs.error(fmt.Errorf("replying cs to request %s with 'protocol error': %w", requestId, err))
+			// Error while sending an error. Will attempt to send a default error instead
+			cs.client.HandleFailedResponseError(requestId, err, "")
+			// Notify client implementation
+			err = fmt.Errorf("replying to request %s with 'internal error' failed: %w", requestId, err)
+			cs.error(err)
 		}
 		return
 	}
 
-	if response == nil {
+	if response == nil || reflect.ValueOf(response).IsNil() {
 		err = fmt.Errorf("empty response to request %s", requestId)
+		// Sending a dummy error to server instead, then notify client implementation
+		_ = cs.client.SendError(requestId, ocppj.GenericError, err.Error(), nil)
 		cs.error(err)
 		return
 	}
 
-	// send response
+	// send confirmation response
 	err = cs.client.SendResponse(requestId, response)
 	if err != nil {
-		cs.error(fmt.Errorf("replying to request %s with 'protocol error': %w", requestId, err))
+		// Error while sending an error. Will attempt to send a default error instead
+		cs.client.HandleFailedResponseError(requestId, err, response.GetFeatureName())
+		// Notify client implementation
+		err = fmt.Errorf("failed responding to request %s: %w", requestId, err)
+		cs.error(err)
 	}
 }
 
 func (cs *chargingStation) Start(csmsUrl string) error {
+	// Overriding some protocol-specific values in the lower layers globally
+	ocppj.FormationViolation = ocppj.FormatViolationV2
+	// Start client
 	cs.stopC = make(chan struct{}, 1)
-	// Async response handler receives incoming responses/errors and triggers callbacks
 	err := cs.client.Start(csmsUrl)
+	// Async response handler receives incoming responses/errors and triggers callbacks
 	if err == nil {
 		go cs.asyncCallbackHandler()
 	}
@@ -589,6 +603,10 @@ func (cs *chargingStation) Start(csmsUrl string) error {
 
 func (cs *chargingStation) Stop() {
 	cs.client.Stop()
+}
+
+func (cs *chargingStation) IsConnected() bool {
+	return cs.client.IsConnected()
 }
 
 func (cs *chargingStation) notImplementedError(requestId string, action string) {

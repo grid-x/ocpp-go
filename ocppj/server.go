@@ -244,7 +244,7 @@ func (s *Server) ocppMessageHandler(wsChannel ws.Channel, data []byte) error {
 		log.Error(err)
 		return err
 	}
-	log.Debugf("received JSON message from %s: %s", wsChannel.ID(), string(data))
+
 	// Get pending requests for client
 	pending := s.RequestState.GetClientState(wsChannel.ID())
 	message, err := s.ParseMessage(parsedJson, pending)

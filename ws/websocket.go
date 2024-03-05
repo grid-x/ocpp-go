@@ -19,6 +19,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+
 	"github.com/lorenzodonini/ocpp-go/logging"
 )
 
@@ -1015,9 +1016,7 @@ func (client *Client) IsConnected() bool {
 }
 
 func (client *Client) Write(data []byte) error {
-	client.mutex.Lock()
-	defer client.mutex.Unlock()
-	if !client.connected {
+	if !client.IsConnected() {
 		return fmt.Errorf("client is currently not connected, cannot send data")
 	}
 	log.Debugf("queuing data for server")

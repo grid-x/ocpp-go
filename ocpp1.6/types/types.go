@@ -2,8 +2,9 @@
 package types
 
 import (
-	"github.com/lorenzodonini/ocpp-go/ocppj"
 	"gopkg.in/go-playground/validator.v9"
+
+	"github.com/lorenzodonini/ocpp-go/ocppj"
 )
 
 const (

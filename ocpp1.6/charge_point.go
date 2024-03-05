@@ -2,6 +2,7 @@ package ocpp16
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/lorenzodonini/ocpp-go/internal/callbackqueue"
@@ -297,19 +298,23 @@ func (cp *chargePoint) clearCallbacks(invokeCallback bool) {
 }
 
 func (cp *chargePoint) sendResponse(confirmation ocpp.Response, err error, requestId string) {
-	// send error response
 	if err != nil {
-		err = cp.client.SendError(requestId, ocppj.ProtocolError, err.Error(), nil)
+		// Send error response
+		err = cp.client.SendError(requestId, ocppj.InternalError, err.Error(), nil)
 		if err != nil {
-			err = fmt.Errorf("replying cs to request %s with 'protocol error': %w", requestId, err)
+			// Error while sending an error. Will attempt to send a default error instead
+			cp.client.HandleFailedResponseError(requestId, err, "")
+			// Notify client implementation
+			err = fmt.Errorf("replying to request %s with 'internal error' failed: %w", requestId, err)
 			cp.error(err)
 		}
-
 		return
 	}
 
-	if confirmation == nil {
+	if confirmation == nil || reflect.ValueOf(confirmation).IsNil() {
 		err = fmt.Errorf("empty confirmation to request %s", requestId)
+		// Sending a dummy error to server instead, then notify client implementation
+		_ = cp.client.SendError(requestId, ocppj.GenericError, err.Error(), nil)
 		cp.error(err)
 		return
 	}
@@ -317,15 +322,21 @@ func (cp *chargePoint) sendResponse(confirmation ocpp.Response, err error, reque
 	// send confirmation response
 	err = cp.client.SendResponse(requestId, confirmation)
 	if err != nil {
-		err = fmt.Errorf("replying cs to request %s: %w", requestId, err)
+		// Error while sending an error. Will attempt to send a default error instead
+		cp.client.HandleFailedResponseError(requestId, err, confirmation.GetFeatureName())
+		// Notify client implementation
+		err = fmt.Errorf("failed responding to request %s: %w", requestId, err)
 		cp.error(err)
 	}
 }
 
 func (cp *chargePoint) Start(centralSystemUrl string) error {
+	// Overriding some protocol-specific values in the lower layers globally
+	ocppj.FormationViolation = ocppj.FormatViolationV16
+	// Start client
 	cp.stopC = make(chan struct{}, 1)
-	// Async response handler receives incoming responses/errors and triggers callbacks
 	err := cp.client.Start(centralSystemUrl)
+	// Async response handler receives incoming responses/errors and triggers callbacks
 	if err == nil {
 		go cp.asyncCallbackHandler()
 	}
@@ -341,6 +352,10 @@ func (cp *chargePoint) Stop() {
 		close(cp.errC)
 		cp.errC = nil
 	}
+}
+
+func (cp *chargePoint) IsConnected() bool {
+	return cp.client.IsConnected()
 }
 
 func (cp *chargePoint) notImplementedError(requestId string, action string) {

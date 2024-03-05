@@ -17,10 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lorenzodonini/ocpp-go/logging"
-
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+	"github.com/lorenzodonini/ocpp-go/logging"
 )
 
 const (
@@ -150,6 +149,8 @@ func (e HttpConnectionError) Error() string {
 
 // ---------------------- SERVER ----------------------
 
+type CheckClientHandler func(id string, r *http.Request) bool
+
 // WsServer defines a websocket server, which passively listens for incoming connections on ws or wss protocol.
 // The offered API are of asynchronous nature, and each incoming connection/message is handled using callbacks.
 //
@@ -235,6 +236,9 @@ type WsServer interface {
 	// By default, if the Origin header is present in the request, and the Origin host is not equal
 	// to the Host request header, the websocket handshake fails.
 	SetCheckOriginHandler(handler func(r *http.Request) bool)
+	// SetCheckClientHandler sets a handler for validate incoming websocket connections, allowing to perform
+	// custom client connection checks.
+	SetCheckClientHandler(handler func(id string, r *http.Request) bool)
 	// Addr gives the address on which the server is listening, useful if, for
 	// example, the port is system-defined (set to 0).
 	Addr() *net.TCPAddr
@@ -247,6 +251,7 @@ type Server struct {
 	connections         map[string]*WebSocket
 	httpServer          *http.Server
 	messageHandler      func(ws Channel, data []byte) error
+	checkClientHandler  func(id string, r *http.Request) bool
 	newClientHandler    func(ws Channel)
 	disconnectedHandler func(ws Channel)
 	basicAuthHandler    func(username string, password string) bool
@@ -257,14 +262,17 @@ type Server struct {
 	errC                chan error
 	connMutex           sync.RWMutex
 	addr                *net.TCPAddr
+	httpHandler         *mux.Router
 }
 
 // Creates a new simple websocket server (the websockets are not secured).
 func NewServer() *Server {
+	router := mux.NewRouter()
 	return &Server{
 		httpServer:    &http.Server{},
 		timeoutConfig: NewServerTimeoutConfig(),
 		upgrader:      websocket.Upgrader{Subprotocols: []string{}},
+		httpHandler:   router,
 	}
 }
 
@@ -283,6 +291,7 @@ func NewServer() *Server {
 // If no tlsConfig parameter is passed, the server will by default
 // not perform any client certificate verification.
 func NewTLSServer(certificatePath string, certificateKey string, tlsConfig *tls.Config) *Server {
+	router := mux.NewRouter()
 	return &Server{
 		tlsCertificatePath: certificatePath,
 		tlsCertificateKey:  certificateKey,
@@ -291,11 +300,16 @@ func NewTLSServer(certificatePath string, certificateKey string, tlsConfig *tls.
 		},
 		timeoutConfig: NewServerTimeoutConfig(),
 		upgrader:      websocket.Upgrader{Subprotocols: []string{}},
+		httpHandler:   router,
 	}
 }
 
 func (server *Server) SetMessageHandler(handler func(ws Channel, data []byte) error) {
 	server.messageHandler = handler
+}
+
+func (server *Server) SetCheckClientHandler(handler func(id string, r *http.Request) bool) {
+	server.checkClientHandler = handler
 }
 
 func (server *Server) SetNewClientHandler(handler func(ws Channel)) {
@@ -346,11 +360,12 @@ func (server *Server) Addr() *net.TCPAddr {
 	return server.addr
 }
 
+func (server *Server) AddHttpHandler(listenPath string, handler func(w http.ResponseWriter, r *http.Request)) {
+	server.httpHandler.HandleFunc(listenPath, handler)
+}
+
 func (server *Server) Start(port int, listenPath string) {
-	router := mux.NewRouter()
-	router.HandleFunc(listenPath, func(w http.ResponseWriter, r *http.Request) {
-		server.wsHandler(w, r)
-	})
+
 	server.connections = make(map[string]*WebSocket)
 	if server.httpServer == nil {
 		server.httpServer = &http.Server{}
@@ -358,7 +373,11 @@ func (server *Server) Start(port int, listenPath string) {
 
 	addr := fmt.Sprintf(":%v", port)
 	server.httpServer.Addr = addr
-	server.httpServer.Handler = router
+
+	server.AddHttpHandler(listenPath, func(w http.ResponseWriter, r *http.Request) {
+		server.wsHandler(w, r)
+	})
+	server.httpServer.Handler = server.httpHandler
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -468,6 +487,16 @@ out:
 			return
 		}
 	}
+
+	if server.checkClientHandler != nil {
+		ok := server.checkClientHandler(id, r)
+		if !ok {
+			server.error(fmt.Errorf("client validation: invalid client"))
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	// Upgrade websocket
 	conn, err := server.upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
@@ -1061,13 +1090,14 @@ func (client *Client) Stop() {
 	}
 	client.mutex.Unlock()
 	// Notify reconnection goroutine to stop (if any)
-	close(client.reconnectC)
+	if client.reconnectC != nil {
+		close(client.reconnectC)
+	}
 	if client.errC != nil {
 		close(client.errC)
 		client.errC = nil
 	}
 	// Wait for connection to actually close
-
 }
 
 func (client *Client) error(err error) {

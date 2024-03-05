@@ -101,6 +101,9 @@ type ChargePoint interface {
 	// Stops the charge point routine, disconnecting it from the central system.
 	// Any pending requests are discarded.
 	Stop()
+	// Returns true if the charge point is currently connected to the central system, false otherwise.
+	// While automatically reconnecting to the central system, the method returns false.
+	IsConnected() bool
 	// Errors returns a channel for error messages. If it doesn't exist it es created.
 	// The channel is closed by the charge point when stopped.
 	Errors() <-chan error
@@ -233,6 +236,8 @@ type CentralSystem interface {
 	SetRemoteTriggerHandler(handler remotetrigger.CentralSystemHandler)
 	// Registers a handler for incoming smart charging profile messages.
 	SetSmartChargingHandler(handler smartcharging.CentralSystemHandler)
+	// Registers a handler for new incoming Charging station connections.
+	SetNewChargingStationValidationHandler(handler ws.CheckClientHandler)
 	// Registers a handler for new incoming charge point connections.
 	SetNewChargePointHandler(handler ChargePointConnectionHandler)
 	// Registers a handler for charge point disconnections.

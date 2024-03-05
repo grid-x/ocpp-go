@@ -3,6 +3,8 @@ package ocppj
 import (
 	"fmt"
 
+	"gopkg.in/go-playground/validator.v9"
+
 	"github.com/lorenzodonini/ocpp-go/ocpp"
 	"github.com/lorenzodonini/ocpp-go/ws"
 )
@@ -18,6 +20,7 @@ type Client struct {
 	errorHandler          func(err *ocpp.Error, details interface{})
 	onDisconnectedHandler func(err error)
 	onReconnectedHandler  func()
+	invalidMessageHook    func(err *ocpp.Error, rawMessage string, parsedFields []interface{}) *ocpp.Error
 	dispatcher            ClientDispatcher
 	RequestState          ClientState
 }
@@ -27,6 +30,7 @@ type Client struct {
 // a state handler and a list of supported profiles (optional).
 //
 // You may create a simple new server by using these default values:
+//
 //	s := ocppj.NewClient(ws.NewClient(), nil, nil)
 //
 // The wsClient parameter cannot be nil. Refer to the ws package for information on how to create and
@@ -70,6 +74,24 @@ func (c *Client) SetOnRequestCanceled(handler func(requestId string, request ocp
 	c.dispatcher.SetOnRequestCanceled(handler)
 }
 
+// SetInvalidMessageHook registers an optional hook for incoming messages that couldn't be parsed.
+// This hook is called when a message is received but cannot be parsed to the target OCPP message struct.
+//
+// The application is notified synchronously of the error.
+// The callback provides the raw JSON string, along with the parsed fields.
+// The application MUST return as soon as possible, since the hook is called synchronously and awaits a return value.
+//
+// While the hook does not allow responding to the message directly,
+// the return value will be used to send an OCPP error to the other endpoint.
+//
+// If no handler is registered (or no error is returned by the hook),
+// the internal error message is sent to the client without further processing.
+//
+// Note: Failing to return from the hook will cause the client to block indefinitely.
+func (c *Client) SetInvalidMessageHook(hook func(err *ocpp.Error, rawMessage string, parsedFields []interface{}) *ocpp.Error) {
+	c.invalidMessageHook = hook
+}
+
 func (c *Client) SetOnDisconnectedHandler(handler func(err error)) {
 	c.onDisconnectedHandler = handler
 }
@@ -104,8 +126,25 @@ func (c *Client) Start(serverURL string) error {
 // Stops the client.
 // The underlying I/O loop is stopped and all pending requests are cleared.
 func (c *Client) Stop() {
+	// Overwrite handler to intercept disconnected signal
+	cleanupC := make(chan struct{}, 1)
+	if c.IsConnected() {
+		c.client.SetDisconnectedHandler(func(err error) {
+			cleanupC <- struct{}{}
+		})
+	} else {
+		close(cleanupC)
+	}
 	c.client.Stop()
-	c.dispatcher.Stop()
+	if c.dispatcher.IsRunning() {
+		c.dispatcher.Stop()
+	}
+	// Wait for websocket to be cleaned up
+	<-cleanupC
+}
+
+func (c *Client) IsConnected() bool {
+	return c.client.IsConnected()
 }
 
 // Sends an OCPP Request to the server.
@@ -159,13 +198,14 @@ func (c *Client) SendResponse(requestId string, response ocpp.Response) error {
 	}
 	jsonMessage, err := callResult.MarshalJSON()
 	if err != nil {
-		return err
+		return ocpp.NewError(GenericError, err.Error(), requestId)
 	}
 	if err = c.client.Write(jsonMessage); err != nil {
-		log.Errorf("error sending response [%s]: %v", callResult.UniqueId, err)
-		return err
+		log.Errorf("error sending response [%s]: %v", callResult.GetUniqueId(), err)
+		return ocpp.NewError(GenericError, err.Error(), requestId)
 	}
-	log.Debugf("sent CALL RESULT [%s]", callResult.UniqueId)
+	log.Debugf("sent CALL RESULT [%s]", callResult.GetUniqueId())
+	log.Debugf("sent JSON message to server: %s", string(jsonMessage))
 	return nil
 }
 
@@ -184,13 +224,14 @@ func (c *Client) SendError(requestId string, errorCode ocpp.ErrorCode, descripti
 	}
 	jsonMessage, err := callError.MarshalJSON()
 	if err != nil {
-		return err
+		return ocpp.NewError(GenericError, err.Error(), requestId)
 	}
 	if err = c.client.Write(jsonMessage); err != nil {
 		log.Errorf("error sending response error [%s]: %v", callError.UniqueId, err)
-		return err
+		return ocpp.NewError(GenericError, err.Error(), requestId)
 	}
 	log.Debugf("sent CALL ERROR [%s]", callError.UniqueId)
+	log.Debugf("sent JSON message to server: %s", string(jsonMessage))
 	return nil
 }
 
@@ -200,9 +241,22 @@ func (c *Client) ocppMessageHandler(data []byte) error {
 		log.Error(err)
 		return err
 	}
+	log.Debugf("received JSON message from server: %s", string(data))
 	message, err := c.ParseMessage(parsedJson, c.RequestState)
 	if err != nil {
 		ocppErr := err.(*ocpp.Error)
+		messageID := ocppErr.MessageId
+		// Support ad-hoc callback for invalid message handling
+		if c.invalidMessageHook != nil {
+			err2 := c.invalidMessageHook(ocppErr, string(data), parsedJson)
+			// If the hook returns an error, use it as output error. If not, use the original error.
+			if err2 != nil {
+				ocppErr = err2
+				ocppErr.MessageId = messageID
+			}
+		}
+		err = ocppErr
+		// Send error to other endpoint if a message ID is available
 		if ocppErr.MessageId != "" {
 			err2 := c.SendError(ocppErr.MessageId, ocppErr.Code, ocppErr.Description, nil)
 			if err2 != nil {
@@ -235,6 +289,33 @@ func (c *Client) ocppMessageHandler(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// HandleFailedResponseError allows to handle failures while sending responses (either CALL_RESULT or CALL_ERROR).
+// It internally analyzes and creates an ocpp.Error based on the given error.
+// It will the attempt to send it to the server.
+//
+// The function helps to prevent starvation on the other endpoint, which is caused by a response never reaching it.
+// The method will, however, only attempt to send a default error once.
+// If this operation fails, the other endpoint may still starve.
+func (c *Client) HandleFailedResponseError(requestID string, err error, featureName string) {
+	log.Debugf("handling error for failed response [%s]", requestID)
+	var responseErr *ocpp.Error
+	// There's several possible errors: invalid profile, invalid payload or send error
+	switch err.(type) {
+	case validator.ValidationErrors:
+		// Validation error
+		validationErr := err.(validator.ValidationErrors)
+		responseErr = errorFromValidation(validationErr, requestID, featureName)
+	case *ocpp.Error:
+		// Internal OCPP error
+		responseErr = err.(*ocpp.Error)
+	case error:
+		// Unknown error
+		responseErr = ocpp.NewError(GenericError, err.Error(), requestID)
+	}
+	// Send an OCPP error to the target, since no regular response could be sent
+	_ = c.SendError(requestID, responseErr.Code, responseErr.Description, nil)
 }
 
 func (c *Client) onDisconnected(err error) {

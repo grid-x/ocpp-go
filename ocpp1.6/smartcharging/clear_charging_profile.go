@@ -1,9 +1,10 @@
 package smartcharging
 
 import (
+	"reflect"
+
 	"github.com/lorenzodonini/ocpp-go/ocpp1.6/types"
 	"gopkg.in/go-playground/validator.v9"
-	"reflect"
 )
 
 // -------------------- Clear Charging Profile (CS -> CP) --------------------
@@ -32,14 +33,14 @@ func isValidClearChargingProfileStatus(fl validator.FieldLevel) bool {
 type ClearChargingProfileRequest struct {
 	Id                     *int                             `json:"id,omitempty" validate:"omitempty"`
 	ConnectorId            *int                             `json:"connectorId,omitempty" validate:"omitempty,gte=0"`
-	ChargingProfilePurpose types.ChargingProfilePurposeType `json:"chargingProfilePurpose,omitempty" validate:"omitempty,chargingProfilePurpose"`
+	ChargingProfilePurpose types.ChargingProfilePurposeType `json:"chargingProfilePurpose,omitempty" validate:"omitempty,chargingProfilePurpose16"`
 	StackLevel             *int                             `json:"stackLevel,omitempty" validate:"omitempty,gte=0"`
 }
 
 // This field definition of the ClearChargingProfile confirmation payload, sent by the Charge Point to the Central System in response to a ClearChargingProfileRequest.
 // In case the request was invalid, or couldn't be processed, an error will be sent instead.
 type ClearChargingProfileConfirmation struct {
-	Status ClearChargingProfileStatus `json:"status" validate:"required,chargingProfileStatus"`
+	Status ClearChargingProfileStatus `json:"status" validate:"required,clearChargingProfileStatus"`
 }
 
 // If the Central System wishes to clear some or all of the charging profiles that were previously sent the Charge Point,

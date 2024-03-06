@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/http"
 	"reflect"
 	"testing"
 
@@ -68,6 +69,7 @@ type MockWebsocketServer struct {
 	ws.WsServer
 	MessageHandler            func(ws ws.Channel, data []byte) error
 	NewClientHandler          func(ws ws.Channel)
+	CheckClientHandler        ws.CheckClientHandler
 	DisconnectedClientHandler func(ws ws.Channel)
 }
 
@@ -101,6 +103,10 @@ func (websocketServer *MockWebsocketServer) AddSupportedSubprotocol(subProto str
 
 func (websocketServer *MockWebsocketServer) NewClient(websocketId string, client interface{}) {
 	websocketServer.MethodCalled("NewClient", websocketId, client)
+}
+
+func (websocketServer *MockWebsocketServer) SetCheckClientHandler(handler func(id string, r *http.Request) bool) {
+	websocketServer.CheckClientHandler = handler
 }
 
 // ---------------------- MOCK WEBSOCKET CLIENT ----------------------
@@ -157,6 +163,11 @@ func (websocketClient *MockWebsocketClient) Errors() <-chan error {
 		websocketClient.errC = make(chan error, 1)
 	}
 	return websocketClient.errC
+}
+
+func (websocketClient *MockWebsocketClient) IsConnected() bool {
+	args := websocketClient.MethodCalled("IsConnected")
+	return args.Bool(0)
 }
 
 // Default queue capacity
@@ -389,10 +400,14 @@ type MockChargingStationDataHandler struct {
 	mock.Mock
 }
 
-func (handler *MockChargingStationDataHandler) OnDataTransfer(request *data.DataTransferRequest) (confirmation *data.DataTransferResponse, err error) {
+func (handler *MockChargingStationDataHandler) OnDataTransfer(request *data.DataTransferRequest) (response *data.DataTransferResponse, err error) {
 	args := handler.MethodCalled("OnDataTransfer", request)
-	conf := args.Get(0).(*data.DataTransferResponse)
-	return conf, args.Error(1)
+	rawResp := args.Get(0)
+	err = args.Error(1)
+	if rawResp != nil {
+		response = rawResp.(*data.DataTransferResponse)
+	}
+	return
 }
 
 // ---------------------- MOCK CSMS DATA HANDLER ----------------------
@@ -401,10 +416,14 @@ type MockCSMSDataHandler struct {
 	mock.Mock
 }
 
-func (handler *MockCSMSDataHandler) OnDataTransfer(chargingStationID string, request *data.DataTransferRequest) (confirmation *data.DataTransferResponse, err error) {
+func (handler *MockCSMSDataHandler) OnDataTransfer(chargingStationID string, request *data.DataTransferRequest) (response *data.DataTransferResponse, err error) {
 	args := handler.MethodCalled("OnDataTransfer", chargingStationID, request)
-	conf := args.Get(0).(*data.DataTransferResponse)
-	return conf, args.Error(1)
+	rawResp := args.Get(0)
+	err = args.Error(1)
+	if rawResp != nil {
+		response = rawResp.(*data.DataTransferResponse)
+	}
+	return
 }
 
 // ---------------------- MOCK CS DIAGNOSTICS HANDLER ----------------------
@@ -977,7 +996,7 @@ func testUnsupportedRequestFromChargingStation(suite *OcppV2TestSuite, request o
 	wsUrl := "someUrl"
 	expectedError := fmt.Sprintf("unsupported action %v on charging station, cannot send request", request.GetFeatureName())
 	errorDescription := fmt.Sprintf("unsupported action %v on CSMS", request.GetFeatureName())
-	errorJson := fmt.Sprintf(`[4,"%v","%v","%v",null]`, messageId, ocppj.NotSupported, errorDescription)
+	errorJson := fmt.Sprintf(`[4,"%v","%v","%v",{}]`, messageId, ocppj.NotSupported, errorDescription)
 	channel := NewMockWebSocket(wsId)
 
 	setupDefaultChargingStationHandlers(suite, expectedChargingStationOptions{serverUrl: wsUrl, clientId: wsId, createChannelOnStart: true, channel: channel, rawWrittenMessage: []byte(errorJson), forwardWrittenMessage: false})
@@ -987,20 +1006,21 @@ func testUnsupportedRequestFromChargingStation(suite *OcppV2TestSuite, request o
 		assert.Equal(t, messageId, err.MessageId)
 		assert.Equal(t, ocppj.NotSupported, err.Code)
 		assert.Equal(t, errorDescription, err.Description)
-		assert.Nil(t, details)
+		assert.Equal(t, map[string]interface{}{}, details)
 		resultChannel <- true
 	})
 	// Start
 	suite.csms.Start(8887, "somePath")
 	err := suite.chargingStation.Start(wsUrl)
 	require.Nil(t, err)
-	// Run request test
+	// 1. Test sending an unsupported request, expecting an error
 	err = suite.chargingStation.SendRequestAsync(request, func(confirmation ocpp.Response, err error) {
 		t.Fail()
 	})
 	require.Error(t, err)
 	assert.Equal(t, expectedError, err.Error())
-	// Run response test
+	// 2. Test receiving an unsupported request on the other endpoint and receiving an error
+	// Mark mocked request as pending, otherwise response will be ignored
 	suite.ocppjClient.RequestState.AddPendingRequest(messageId, request)
 	err = suite.mockWsServer.MessageHandler(channel, []byte(requestJson))
 	require.Nil(t, err)
@@ -1014,33 +1034,38 @@ func testUnsupportedRequestFromCentralSystem(suite *OcppV2TestSuite, request ocp
 	wsUrl := "someUrl"
 	expectedError := fmt.Sprintf("unsupported action %v on CSMS, cannot send request", request.GetFeatureName())
 	errorDescription := fmt.Sprintf("unsupported action %v on charging station", request.GetFeatureName())
-	errorJson := fmt.Sprintf(`[4,"%v","%v","%v",null]`, messageId, ocppj.NotSupported, errorDescription)
+	errorJson := fmt.Sprintf(`[4,"%v","%v","%v",{}]`, messageId, ocppj.NotSupported, errorDescription)
 	channel := NewMockWebSocket(wsId)
 
 	setupDefaultCSMSHandlers(suite, expectedCSMSOptions{clientId: wsId, rawWrittenMessage: []byte(requestJson), forwardWrittenMessage: false})
 	setupDefaultChargingStationHandlers(suite, expectedChargingStationOptions{serverUrl: wsUrl, clientId: wsId, createChannelOnStart: true, channel: channel, rawWrittenMessage: []byte(errorJson), forwardWrittenMessage: true}, handlers...)
+	resultChannel := make(chan struct{}, 1)
 	suite.ocppjServer.SetErrorHandler(func(channel ws.Channel, err *ocpp.Error, details interface{}) {
 		assert.Equal(t, messageId, err.MessageId)
 		assert.Equal(t, wsId, channel.ID())
 		assert.Equal(t, ocppj.NotSupported, err.Code)
 		assert.Equal(t, errorDescription, err.Description)
-		assert.Nil(t, details)
+		assert.Equal(t, map[string]interface{}{}, details)
+		resultChannel <- struct{}{}
 	})
 	// Start
 	suite.csms.Start(8887, "somePath")
 	err := suite.chargingStation.Start(wsUrl)
 	require.Nil(t, err)
-	// Run request test, expecting an error
+	// 1. Test sending an unsupported request, expecting an error
 	err = suite.csms.SendRequestAsync(wsId, request, func(response ocpp.Response, err error) {
 		t.Fail()
 	})
 	require.Error(t, err)
 	assert.Equal(t, expectedError, err.Error())
+	// 2. Test receiving an unsupported request on the other endpoint and receiving an error
 	// Mark mocked request as pending, otherwise response will be ignored
 	suite.ocppjServer.RequestState.AddPendingRequest(wsId, messageId, request)
 	// Run response test
 	err = suite.mockWsClient.MessageHandler([]byte(requestJson))
 	assert.Nil(t, err)
+	_, ok := <-resultChannel
+	assert.True(t, ok)
 }
 
 type GenericTestEntry struct {
@@ -1116,6 +1141,16 @@ func (suite *OcppV2TestSuite) SetupTest() {
 		return defaultMessageId
 	}}
 	ocppj.SetMessageIdGenerator(suite.messageIdGenerator.generateId)
+}
+
+func (suite *OcppV2TestSuite) TestIsConnected() {
+	t := suite.T()
+	// Simulate ws connected
+	mockCall := suite.mockWsClient.On("IsConnected").Return(true)
+	assert.True(t, suite.chargingStation.IsConnected())
+	// Simulate ws disconnected
+	mockCall.Return(false)
+	assert.False(t, suite.chargingStation.IsConnected())
 }
 
 //TODO: implement generic protocol tests

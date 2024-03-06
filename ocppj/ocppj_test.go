@@ -4,8 +4,11 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/http"
 	"reflect"
 	"testing"
+
+	ut "github.com/go-playground/universal-translator"
 
 	"github.com/lorenzodonini/ocpp-go/logging"
 
@@ -51,6 +54,7 @@ type MockWebsocketServer struct {
 	ws.WsServer
 	MessageHandler            func(ws ws.Channel, data []byte) error
 	NewClientHandler          func(ws ws.Channel)
+	CheckClientHandler        ws.CheckClientHandler
 	DisconnectedClientHandler func(ws ws.Channel)
 	errC                      chan error
 }
@@ -98,6 +102,10 @@ func (websocketServer *MockWebsocketServer) ThrowError(err error) {
 
 func (websocketServer *MockWebsocketServer) NewClient(websocketId string, client interface{}) {
 	websocketServer.MethodCalled("NewClient", websocketId, client)
+}
+
+func (websocketServer *MockWebsocketServer) SetCheckClientHandler(handler func(id string, r *http.Request) bool) {
+	websocketServer.CheckClientHandler = handler
 }
 
 // ---------------------- MOCK WEBSOCKET CLIENT ----------------------
@@ -162,6 +170,11 @@ func (websocketClient *MockWebsocketClient) Errors() <-chan error {
 	return websocketClient.errC
 }
 
+func (websocketClient *MockWebsocketClient) IsConnected() bool {
+	args := websocketClient.MethodCalled("IsConnected")
+	return args.Bool(0)
+}
+
 // ---------------------- MOCK FEATURE ----------------------
 const (
 	MockFeatureName = "Mock"
@@ -182,23 +195,23 @@ type MockFeature struct {
 	mock.Mock
 }
 
-func (f MockFeature) GetFeatureName() string {
+func (f *MockFeature) GetFeatureName() string {
 	return MockFeatureName
 }
 
-func (f MockFeature) GetRequestType() reflect.Type {
+func (f *MockFeature) GetRequestType() reflect.Type {
 	return reflect.TypeOf(MockRequest{})
 }
 
-func (f MockFeature) GetResponseType() reflect.Type {
+func (f *MockFeature) GetResponseType() reflect.Type {
 	return reflect.TypeOf(MockConfirmation{})
 }
 
-func (r MockRequest) GetFeatureName() string {
+func (r *MockRequest) GetFeatureName() string {
 	return MockFeatureName
 }
 
-func (c MockConfirmation) GetFeatureName() string {
+func (c *MockConfirmation) GetFeatureName() string {
 	return MockFeatureName
 }
 
@@ -208,6 +221,14 @@ func newMockRequest(value string) *MockRequest {
 
 func newMockConfirmation(value string) *MockConfirmation {
 	return &MockConfirmation{MockValue: value}
+}
+
+type MockUnsupportedResponse struct {
+	MockValue string `json:"mockValue" validate:"required,min=5"`
+}
+
+func (m *MockUnsupportedResponse) GetFeatureName() string {
+	return "SomeRandomFeature"
 }
 
 // ---------------------- COMMON UTILITY METHODS ----------------------
@@ -343,7 +364,7 @@ type OcppJTestSuite struct {
 }
 
 func (suite *OcppJTestSuite) SetupTest() {
-	mockProfile := ocpp.NewProfile("mock", MockFeature{})
+	mockProfile := ocpp.NewProfile("mock", &MockFeature{})
 	mockClient := MockWebsocketClient{}
 	mockServer := MockWebsocketServer{}
 	suite.mockClient = &mockClient
@@ -608,6 +629,26 @@ func (suite *OcppJTestSuite) TestParseMessageInvalidCall() {
 	assert.Equal(t, "Invalid Call message. Expected array length 4", protoErr.Description)
 }
 
+func (suite *OcppJTestSuite) TestParseMessageInvalidActionCall() {
+	t := suite.T()
+	mockMessage := make([]interface{}, 4)
+	messageId := "12345"
+	mockRequest := newMockRequest("")
+	// Test invalid message length
+	mockMessage[0] = float64(ocppj.CALL) // Message Type ID
+	mockMessage[1] = messageId           // Unique ID
+	mockMessage[2] = float64(42)         // Wrong type on action parameter
+	mockMessage[3] = mockRequest
+	message, err := suite.chargePoint.ParseMessage(mockMessage, suite.chargePoint.RequestState)
+	require.Nil(t, message)
+	require.Error(t, err)
+	protoErr := err.(*ocpp.Error)
+	require.NotNil(t, protoErr)
+	assert.Equal(t, protoErr.MessageId, "") // unique id is never set after invalid type cast return
+	assert.Equal(t, ocppj.FormationViolation, protoErr.Code)
+	assert.Equal(t, "Invalid element 42 at 2, expected action (string)", protoErr.Description)
+}
+
 func (suite *OcppJTestSuite) TestParseMessageInvalidCallResult() {
 	t := suite.T()
 	mockMessage := make([]interface{}, 3)
@@ -641,6 +682,27 @@ func (suite *OcppJTestSuite) TestParseMessageInvalidCallError() {
 	assert.Equal(t, messageId, protoErr.MessageId)
 	assert.Equal(t, ocppj.FormationViolation, protoErr.Code)
 	assert.Equal(t, "Invalid Call Error message. Expected array length >= 4", protoErr.Description)
+}
+
+func (suite *OcppJTestSuite) TestParseMessageInvalidRawErrorCode() {
+	t := suite.T()
+	mockMessage := make([]interface{}, 5)
+	messageId := "12345"
+	pendingRequest := newMockRequest("request")
+	mockMessage[0] = float64(ocppj.CALL_ERROR) // Message Type ID
+	mockMessage[1] = messageId                 // Unique ID
+	mockMessage[2] = float64(42)               // test invalid typecast
+	mockMessage[3] = "error description"
+	mockMessage[4] = "error details"
+	suite.chargePoint.RequestState.AddPendingRequest(messageId, pendingRequest) // Manually add a pending request, so that response is not rejected
+	message, err := suite.chargePoint.ParseMessage(mockMessage, suite.chargePoint.RequestState)
+	require.Nil(t, message)
+	require.Error(t, err)
+	protoErr := err.(*ocpp.Error)
+	require.NotNil(t, protoErr)
+	assert.Equal(t, protoErr.MessageId, "") // unique id is never set after invalid type cast return
+	assert.Equal(t, ocppj.FormationViolation, protoErr.Code)
+	assert.Equal(t, "Invalid element 42 at 2, expected rawErrorCode (string)", protoErr.Description)
 }
 
 func (suite *OcppJTestSuite) TestParseMessageInvalidRequest() {
@@ -769,6 +831,27 @@ func (suite *OcppJTestSuite) TestLogger() {
 		assert.Equal(t, "cannot set a nil logger", r.(string))
 	})
 }
+
+type MockValidationError struct {
+	tag       string
+	namespace string
+	param     string
+	value     string
+	typ       reflect.Type
+}
+
+func (m MockValidationError) ActualTag() string                 { return m.tag }
+func (m MockValidationError) Tag() string                       { return m.tag }
+func (m MockValidationError) Namespace() string                 { return m.namespace }
+func (m MockValidationError) StructNamespace() string           { return m.namespace }
+func (m MockValidationError) Field() string                     { return m.namespace }
+func (m MockValidationError) StructField() string               { return m.namespace }
+func (m MockValidationError) Value() interface{}                { return m.value }
+func (m MockValidationError) Param() string                     { return m.param }
+func (m MockValidationError) Kind() reflect.Kind                { return m.typ.Kind() }
+func (m MockValidationError) Type() reflect.Type                { return m.typ }
+func (m MockValidationError) Translate(ut ut.Translator) string { return "" }
+func (m MockValidationError) Error() string                     { return fmt.Sprintf("some error for value %s", m.value) }
 
 func TestMockOcppJ(t *testing.T) {
 	suite.Run(t, new(ClientQueueTestSuite))

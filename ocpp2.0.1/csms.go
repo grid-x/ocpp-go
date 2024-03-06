@@ -2,6 +2,7 @@ package ocpp2
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/lorenzodonini/ocpp-go/internal/callbackqueue"
 	"github.com/lorenzodonini/ocpp-go/ocpp"
@@ -296,8 +297,8 @@ func (cs *csms) GetDisplayMessages(clientId string, callback func(*display.GetDi
 	return cs.SendRequestAsync(clientId, request, genericCallback)
 }
 
-func (cs *csms) GetInstalledCertificateIds(clientId string, callback func(*iso15118.GetInstalledCertificateIdsResponse, error), typeOfCertificate types.CertificateUse, props ...func(*iso15118.GetInstalledCertificateIdsRequest)) error {
-	request := iso15118.NewGetInstalledCertificateIdsRequest(typeOfCertificate)
+func (cs *csms) GetInstalledCertificateIds(clientId string, callback func(*iso15118.GetInstalledCertificateIdsResponse, error), props ...func(*iso15118.GetInstalledCertificateIdsRequest)) error {
+	request := iso15118.NewGetInstalledCertificateIdsRequest()
 	for _, fn := range props {
 		fn(request)
 	}
@@ -431,7 +432,7 @@ func (cs *csms) PublishFirmware(clientId string, callback func(*firmware.Publish
 	return cs.SendRequestAsync(clientId, request, genericCallback)
 }
 
-func (cs *csms) RequestStartTransaction(clientId string, callback func(*remotecontrol.RequestStartTransactionResponse, error), remoteStartID int, IdToken types.IdTokenType, props ...func(request *remotecontrol.RequestStartTransactionRequest)) error {
+func (cs *csms) RequestStartTransaction(clientId string, callback func(*remotecontrol.RequestStartTransactionResponse, error), remoteStartID int, IdToken types.IdToken, props ...func(request *remotecontrol.RequestStartTransactionRequest)) error {
 	request := remotecontrol.NewRequestStartTransactionRequest(remoteStartID, IdToken)
 	for _, fn := range props {
 		fn(request)
@@ -461,7 +462,7 @@ func (cs *csms) RequestStopTransaction(clientId string, callback func(*remotecon
 	return cs.SendRequestAsync(clientId, request, genericCallback)
 }
 
-func (cs *csms) ReserveNow(clientId string, callback func(*reservation.ReserveNowResponse, error), id int, expiryDateTime *types.DateTime, idToken types.IdTokenType, props ...func(request *reservation.ReserveNowRequest)) error {
+func (cs *csms) ReserveNow(clientId string, callback func(*reservation.ReserveNowResponse, error), id int, expiryDateTime *types.DateTime, idToken types.IdToken, props ...func(request *reservation.ReserveNowRequest)) error {
 	request := reservation.NewReserveNowRequest(id, expiryDateTime, idToken)
 	for _, fn := range props {
 		fn(request)
@@ -735,6 +736,10 @@ func (cs *csms) SetDataHandler(handler data.CSMSHandler) {
 	cs.dataHandler = handler
 }
 
+func (cs *csms) SetNewChargingStationValidationHandler(handler ws.CheckClientHandler) {
+	cs.server.SetNewClientValidationHandler(handler)
+}
+
 func (cs *csms) SetNewChargingStationHandler(handler ChargingStationConnectionHandler) {
 	cs.server.SetNewClientHandler(func(chargingStation ws.Channel) {
 		handler(chargingStation)
@@ -805,27 +810,41 @@ func (cs *csms) SendRequestAsync(clientId string, request ocpp.Request, callback
 }
 
 func (cs *csms) Start(listenPort int, listenPath string) {
+	// Overriding some protocol-specific values in the lower layers globally
+	ocppj.FormationViolation = ocppj.FormatViolationV2
+	// Start server
 	cs.server.Start(listenPort, listenPath)
 }
 
 func (cs *csms) sendResponse(chargingStationID string, response ocpp.Response, err error, requestId string) {
 	if err != nil {
-		err := cs.server.SendError(chargingStationID, requestId, ocppj.ProtocolError, "Couldn't generate valid confirmation", nil)
+		// Send error response
+		err = cs.server.SendError(chargingStationID, requestId, ocppj.InternalError, err.Error(), nil)
 		if err != nil {
-			err = fmt.Errorf("replying cs %s to request %s with 'protocol error': %w", chargingStationID, requestId, err)
+			// Error while sending an error. Will attempt to send a default error instead
+			cs.server.HandleFailedResponseError(chargingStationID, requestId, err, "")
+			// Notify client implementation
+			err = fmt.Errorf("error replying cp %s to request %s with 'internal error': %w", chargingStationID, requestId, err)
 			cs.error(err)
 		}
 		return
 	}
-	if response == nil {
+
+	if response == nil || reflect.ValueOf(response).IsNil() {
 		err = fmt.Errorf("empty response to %s for request %s", chargingStationID, requestId)
+		// Sending a dummy error to server instead, then notify client implementation
+		_ = cs.server.SendError(chargingStationID, requestId, ocppj.GenericError, err.Error(), nil)
 		cs.error(err)
 		return
 	}
-	// send response
+
+	// send confirmation response
 	err = cs.server.SendResponse(chargingStationID, requestId, response)
 	if err != nil {
-		err = fmt.Errorf("replying cs %s to request %s: %w", chargingStationID, requestId, err)
+		// Error while sending an error. Will attempt to send a default error instead
+		cs.server.HandleFailedResponseError(chargingStationID, requestId, err, response.GetFeatureName())
+		// Notify client implementation
+		err = fmt.Errorf("error replying cp %s to request %s: %w", chargingStationID, requestId, err)
 		cs.error(err)
 	}
 }

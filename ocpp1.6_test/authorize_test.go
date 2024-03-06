@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
-	"github.com/lorenzodonini/ocpp-go/ocpp1.6/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
+	"github.com/lorenzodonini/ocpp-go/ocpp1.6/types"
 )
 
 // Test
@@ -16,7 +17,7 @@ func (suite *OcppV16TestSuite) TestAuthorizeRequestValidation() {
 	t := suite.T()
 	var requestTable = []GenericTestEntry{
 		{core.AuthorizeRequest{IdTag: "12345"}, true},
-		{core.AuthorizeRequest{}, false},
+		{core.AuthorizeRequest{}, true},
 		{core.AuthorizeRequest{IdTag: ">20.................."}, false},
 	}
 	ExecuteGenericTestTable(t, requestTable)

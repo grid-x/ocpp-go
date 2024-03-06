@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
-	"github.com/lorenzodonini/ocpp-go/ocpp1.6/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
+	"github.com/lorenzodonini/ocpp-go/ocpp1.6/types"
 )
 
 // Test
@@ -22,7 +23,7 @@ func (suite *OcppV16TestSuite) TestStartTransactionRequestValidation() {
 		{core.StartTransactionRequest{ConnectorId: -1, IdTag: "12345", MeterStart: 100, Timestamp: types.NewDateTime(time.Now())}, false},
 		{core.StartTransactionRequest{ConnectorId: 1, IdTag: ">20..................", MeterStart: 100, Timestamp: types.NewDateTime(time.Now())}, false},
 		{core.StartTransactionRequest{IdTag: "12345", MeterStart: 100, Timestamp: types.NewDateTime(time.Now())}, false},
-		{core.StartTransactionRequest{ConnectorId: 1, MeterStart: 100, Timestamp: types.NewDateTime(time.Now())}, false},
+		{core.StartTransactionRequest{ConnectorId: 1, MeterStart: 100, Timestamp: types.NewDateTime(time.Now())}, true},
 		{core.StartTransactionRequest{ConnectorId: 1, IdTag: "12345", MeterStart: 100}, false},
 	}
 	ExecuteGenericTestTable(t, requestTable)

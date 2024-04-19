@@ -381,6 +381,7 @@ func NewDefaultServerDispatcher(queueMap ServerQueueMap) *DefaultServerDispatche
 		requestChannel:   nil,
 		readyForDispatch: make(chan string, 1),
 		timeout:          defaultMessageTimeout,
+		stoppedC:         make(chan struct{}, 1),
 	}
 	d.pendingRequestState = NewServerState(&d.mutex)
 	return d
@@ -389,7 +390,6 @@ func NewDefaultServerDispatcher(queueMap ServerQueueMap) *DefaultServerDispatche
 func (d *DefaultServerDispatcher) Start() {
 	d.requestChannel = make(chan string, 20)
 	d.timerC = make(chan string, 10)
-	d.stoppedC = make(chan struct{}, 1)
 	d.running = true
 	go d.messagePump()
 }
@@ -404,7 +404,12 @@ func (d *DefaultServerDispatcher) Stop() {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 	d.running = false
-	close(d.stoppedC)
+
+	select {
+	case <-d.stoppedC:
+	default:
+		close(d.stoppedC)
+	}
 }
 
 func (d *DefaultServerDispatcher) SetTimeout(timeout time.Duration) {

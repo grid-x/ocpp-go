@@ -67,7 +67,8 @@ func NewServer(wsServer ws.WsServer, dispatcher ServerDispatcher, stateHandler S
 		server:       wsServer,
 		RequestState: stateHandler,
 		dispatcher:   dispatcher,
-		stopped:      make(chan struct{})}
+		stopped:      make(chan struct{}),
+	}
 	for _, profile := range profiles {
 		s.AddProfile(profile)
 	}
@@ -148,7 +149,11 @@ func (s *Server) Start(listenPort int, listenPath string) {
 // Stops the server.
 // This clears all pending requests and causes the Start function to return.
 func (s *Server) Stop() {
-	close(s.stopped)
+	select {
+	case <-s.stopped:
+	default:
+		close(s.stopped)
+	}
 	s.waitGroup.Wait()
 	s.server.Stop()
 	s.dispatcher.Stop()

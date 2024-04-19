@@ -54,6 +54,20 @@ func (suite *OcppJTestSuite) TestServerStoppedError() {
 	assert.Error(t, err, "ocppj server is not started, couldn't send request")
 }
 
+func (suite *OcppJTestSuite) TestServerStopBeforeStart() {
+	t := suite.T()
+
+	// Stop server
+	suite.mockServer.On("Stop").Return(nil)
+	suite.centralSystem.Stop()
+
+	// Start server (should return)
+	suite.mockServer.On("Start", mock.AnythingOfType("int"), mock.AnythingOfType("string")).Return(nil)
+	suite.centralSystem.Start(8887, "/{ws}")
+
+	assert.True(t, suite.serverDispatcher.IsRunning())
+}
+
 // ----------------- SendRequest tests -----------------
 
 func (suite *OcppJTestSuite) TestCentralSystemSendRequest() {

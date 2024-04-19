@@ -62,7 +62,12 @@ func NewServer(wsServer ws.WsServer, dispatcher ServerDispatcher, stateHandler S
 	dispatcher.SetPendingRequestState(stateHandler)
 
 	// Create server and add profiles
-	s := Server{Endpoint: Endpoint{}, server: wsServer, RequestState: stateHandler, dispatcher: dispatcher}
+	s := Server{
+		Endpoint:     Endpoint{},
+		server:       wsServer,
+		RequestState: stateHandler,
+		dispatcher:   dispatcher,
+		stopped:      make(chan struct{})}
 	for _, profile := range profiles {
 		s.AddProfile(profile)
 	}
@@ -130,7 +135,6 @@ func (s *Server) SetDisconnectedClientHandler(handler ClientHandler) {
 // An error may be returned, if the websocket server couldn't be started.
 func (s *Server) Start(listenPort int, listenPath string) {
 	// Set internal message handler
-	s.stopped = make(chan struct{})
 	s.server.SetCheckClientHandler(s.checkClientHandler)
 	s.server.SetNewClientHandler(s.onClientConnected)
 	s.server.SetDisconnectedClientHandler(s.onClientDisconnected)

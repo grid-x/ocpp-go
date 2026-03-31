@@ -89,6 +89,7 @@ type DefaultClientDispatcher struct {
 	requestQueue        RequestQueue
 	requestChannel      chan bool
 	readyForDispatch    chan bool
+	stoppedC            chan struct{}
 	pendingRequestState ClientState
 	network             ws.WsClient
 	mutex               sync.RWMutex
@@ -121,7 +122,10 @@ func (d *DefaultClientDispatcher) SetTimeout(timeout time.Duration) {
 }
 
 func (d *DefaultClientDispatcher) Start() {
+	d.mutex.Lock()
 	d.requestChannel = make(chan bool, 1)
+	d.stoppedC = make(chan struct{})
+	d.mutex.Unlock()
 	d.timer = time.NewTimer(defaultTimeoutTick) // Default to 24 hours tick
 	go d.messagePump()
 }
@@ -141,8 +145,14 @@ func (d *DefaultClientDispatcher) IsPaused() bool {
 func (d *DefaultClientDispatcher) Stop() {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	close(d.requestChannel)
-	// TODO: clear pending requests?
+	if d.stoppedC != nil {
+		select {
+		case <-d.stoppedC:
+		default:
+			close(d.stoppedC)
+		}
+	}
+	d.requestChannel = nil
 }
 
 func (d *DefaultClientDispatcher) SetNetworkClient(client ws.WsClient) {
@@ -157,22 +167,41 @@ func (d *DefaultClientDispatcher) SendRequest(req RequestBundle) error {
 	if d.network == nil {
 		return fmt.Errorf("cannot SendRequest, no network client was set")
 	}
+	d.mutex.RLock()
+	rc := d.requestChannel
+	sc := d.stoppedC
+	d.mutex.RUnlock()
+	if rc == nil {
+		return fmt.Errorf("client dispatcher is not running, cannot send request")
+	}
 	if err := d.requestQueue.Push(req); err != nil {
 		return err
 	}
-	d.requestChannel <- true
-	return nil
+	select {
+	case rc <- true:
+		return nil
+	case <-sc:
+		return fmt.Errorf("client stopped")
+	}
 }
 
 func (d *DefaultClientDispatcher) messagePump() {
 	rdy := true // Ready to transmit at the beginning
 	for {
 		select {
+		case <-d.stoppedC:
+			d.requestQueue.Init()
+			d.mutex.Lock()
+			d.requestChannel = nil
+			d.mutex.Unlock()
+			return
 		case _, ok := <-d.requestChannel:
 			// New request was posted
 			if !ok {
 				d.requestQueue.Init()
+				d.mutex.Lock()
 				d.requestChannel = nil
+				d.mutex.Unlock()
 				return
 			}
 		case _, ok := <-d.timer.C:

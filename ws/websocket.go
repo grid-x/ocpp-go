@@ -261,6 +261,7 @@ type Server struct {
 	timeoutConfig       ServerTimeoutConfig
 	upgrader            websocket.Upgrader
 	errC                chan error
+	errMu               sync.Mutex // guards errC: error() sends on it while Stop closes it
 	connMutex           sync.RWMutex
 	addr                *net.TCPAddr
 	httpHandler         *mux.Router
@@ -345,12 +346,22 @@ func (server *Server) SetCheckOriginHandler(handler func(r *http.Request) bool) 
 
 func (server *Server) error(err error) {
 	log.Error(err)
+	server.errMu.Lock()
+	defer server.errMu.Unlock()
 	if server.errC != nil {
-		server.errC <- err
+		// Never block while holding errMu: Stop needs it to close the channel. If
+		// nobody is draining the (buffered) channel the error is dropped; it has
+		// already been logged above.
+		select {
+		case server.errC <- err:
+		default:
+		}
 	}
 }
 
 func (server *Server) Errors() <-chan error {
+	server.errMu.Lock()
+	defer server.errMu.Unlock()
 	if server.errC == nil {
 		server.errC = make(chan error, 1)
 	}
@@ -358,6 +369,8 @@ func (server *Server) Errors() <-chan error {
 }
 
 func (server *Server) Addr() *net.TCPAddr {
+	server.connMutex.RLock()
+	defer server.connMutex.RUnlock()
 	return server.addr
 }
 
@@ -386,7 +399,9 @@ func (server *Server) Start(port int, listenPath string) {
 		return
 	}
 
+	server.connMutex.Lock()
 	server.addr = ln.Addr().(*net.TCPAddr)
+	server.connMutex.Unlock()
 
 	defer ln.Close()
 
@@ -410,6 +425,8 @@ func (server *Server) Stop() {
 		server.error(fmt.Errorf("shutdown failed: %w", err))
 	}
 
+	server.errMu.Lock()
+	defer server.errMu.Unlock()
 	if server.errC != nil {
 		close(server.errC)
 		server.errC = nil
@@ -769,6 +786,7 @@ type Client struct {
 	onDisconnected func(err error)
 	onReconnected  func()
 	mutex          sync.Mutex
+	errMu          sync.Mutex // guards errC: error() sends on it while Stop closes it
 	errC           chan error
 	reconnectC     chan struct{} // used for signaling, that a reconnection attempt should be interrupted
 }
@@ -816,8 +834,30 @@ func NewTLSClient(tlsConfig *tls.Config) *Client {
 	return client
 }
 
+// The handlers are read by the connection goroutines, so they are guarded by
+// client.mutex. Callers may swap them at any time (ocppj.Client.Stop does).
 func (client *Client) SetMessageHandler(handler func(data []byte) error) {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
 	client.messageHandler = handler
+}
+
+func (client *Client) getMessageHandler() func(data []byte) error {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	return client.messageHandler
+}
+
+func (client *Client) getDisconnectedHandler() func(err error) {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	return client.onDisconnected
+}
+
+func (client *Client) getReconnectedHandler() func() {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	return client.onReconnected
 }
 
 func (client *Client) SetTimeoutConfig(config ClientTimeoutConfig) {
@@ -825,10 +865,14 @@ func (client *Client) SetTimeoutConfig(config ClientTimeoutConfig) {
 }
 
 func (client *Client) SetDisconnectedHandler(handler func(err error)) {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
 	client.onDisconnected = handler
 }
 
 func (client *Client) SetReconnectedHandler(handler func()) {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
 	client.onReconnected = handler
 }
 
@@ -870,22 +914,22 @@ func (client *Client) getReadTimeout() time.Time {
 	return time.Now().Add(client.timeoutConfig.PongWait)
 }
 
-func (client *Client) writePump() {
+func (client *Client) writePump(socket WebSocket) {
 	ticker := time.NewTicker(client.timeoutConfig.PingPeriod)
-	conn := client.webSocket.connection
+	conn := socket.connection
 	// Closure function correctly closes the current connection
 	closure := func(err error) {
 		ticker.Stop()
-		client.cleanup()
+		client.cleanup(socket)
 		// Invoke callback
-		if client.onDisconnected != nil {
-			client.onDisconnected(err)
+		if handler := client.getDisconnectedHandler(); handler != nil {
+			handler(err)
 		}
 	}
 
 	for {
 		select {
-		case data := <-client.webSocket.outQueue:
+		case data := <-socket.outQueue:
 			// Send data
 			log.Debugf("sending data")
 			_ = conn.SetWriteDeadline(time.Now().Add(client.timeoutConfig.WriteWait))
@@ -907,7 +951,7 @@ func (client *Client) writePump() {
 				return
 			}
 			log.Debugf("ping sent")
-		case closeErr := <-client.webSocket.closeC:
+		case closeErr := <-socket.closeC:
 			log.Debugf("closing connection")
 			// Closing connection gracefully
 			if err := conn.WriteControl(
@@ -921,7 +965,7 @@ func (client *Client) writePump() {
 			// Passing nil will also not call onDisconnected.
 			closure(nil)
 			return
-		case closed, ok := <-client.webSocket.forceCloseC:
+		case closed, ok := <-socket.forceCloseC:
 			log.Debugf("handling forced close signal")
 			// Read pump sent a forceClose signal (reading failed -> aborting the connection)
 			if !ok || closed != nil {
@@ -933,8 +977,8 @@ func (client *Client) writePump() {
 	}
 }
 
-func (client *Client) readPump() {
-	conn := client.webSocket.connection
+func (client *Client) readPump(socket WebSocket) {
+	conn := socket.connection
 	_ = conn.SetReadDeadline(client.getReadTimeout())
 	conn.SetPongHandler(func(string) error {
 		log.Debugf("pong received")
@@ -947,13 +991,13 @@ func (client *Client) readPump() {
 				client.error(fmt.Errorf("read failed: %w", err))
 			}
 			// Notify writePump of error. Forced close will be handled there
-			client.webSocket.forceCloseC <- err
+			socket.forceCloseC <- err
 			return
 		}
 
 		log.Debugf("received %v bytes", len(message))
-		if client.messageHandler != nil {
-			err = client.messageHandler(message)
+		if handler := client.getMessageHandler(); handler != nil {
+			err = handler(message)
 			if err != nil {
 				client.error(fmt.Errorf("handle failed: %w", err))
 				continue
@@ -964,33 +1008,36 @@ func (client *Client) readPump() {
 
 // Frees internal resources after a websocket connection was signaled to be closed.
 // From this moment onwards, no new messages may be sent.
-func (client *Client) cleanup() {
+func (client *Client) cleanup(ws WebSocket) {
 	client.setConnected(false)
-	ws := client.webSocket
 	_ = ws.connection.Close()
-	client.mutex.Lock()
-	defer client.mutex.Unlock()
-	close(ws.outQueue)
-	close(ws.closeC)
+	// outQueue is never closed: Write may be sending on it right now, and a send on
+	// a closed channel panics. Writers select on ws.closed instead.
+	close(ws.closed)
 }
 
 func (client *Client) handleReconnection() {
 	log.Info("started automatic reconnection handler")
+	// Start replaces reconnectC and url, so take them once: Stop closes the
+	// channel that was current when this disconnect happened.
+	client.mutex.Lock()
+	reconnectC, reconnectURL := client.reconnectC, client.url
+	client.mutex.Unlock()
 	delay := client.timeoutConfig.ReconnectBackoff
 	for {
 		// Wait before reconnecting
 		select {
 		case <-time.After(delay):
-		case <-client.reconnectC:
+		case <-reconnectC:
 			return
 		}
 
-		err := client.Start(client.url.String())
+		err := client.Start(reconnectURL.String())
 		if err == nil {
 			// Re-connection was successful
 			log.Info("reconnected successfully to server")
-			if client.onReconnected != nil {
-				client.onReconnected()
+			if handler := client.getReconnectedHandler(); handler != nil {
+				handler()
 			}
 			return
 		}
@@ -1016,12 +1063,19 @@ func (client *Client) IsConnected() bool {
 }
 
 func (client *Client) Write(data []byte) error {
-	if !client.IsConnected() {
+	client.mutex.Lock()
+	connected, socket := client.connected, client.webSocket
+	client.mutex.Unlock()
+	if !connected {
 		return fmt.Errorf("client is currently not connected, cannot send data")
 	}
 	log.Debugf("queuing data for server")
-	client.webSocket.outQueue <- data
-	return nil
+	select {
+	case socket.outQueue <- data:
+		return nil
+	case <-socket.closed:
+		return fmt.Errorf("client was disconnected while sending data")
+	}
 }
 
 func (client *Client) Start(urlStr string) error {
@@ -1058,21 +1112,25 @@ func (client *Client) Start(urlStr string) error {
 
 	// The id of the charge point is the final path element
 	id := path.Base(url.Path)
-	client.url = *url
-	client.webSocket = WebSocket{
+	socket := WebSocket{
 		connection:         ws,
 		id:                 id,
 		outQueue:           make(chan []byte, 1),
 		closeC:             make(chan websocket.CloseError, 1),
 		forceCloseC:        make(chan error, 1),
+		closed:             make(chan struct{}),
 		tlsConnectionState: resp.TLS,
 	}
 	log.Infof("connected to server as %s", id)
+	client.mutex.Lock()
+	client.url = *url
+	client.webSocket = socket
 	client.reconnectC = make(chan struct{})
-	client.setConnected(true)
+	client.connected = true
+	client.mutex.Unlock()
 	// Start reader and write routine
-	go client.writePump()
-	go client.readPump()
+	go client.writePump(socket)
+	go client.readPump(socket)
 	return nil
 }
 
@@ -1087,26 +1145,37 @@ func (client *Client) Stop() {
 		default:
 		}
 	}
+	reconnectC := client.reconnectC
 	client.mutex.Unlock()
 	// Notify reconnection goroutine to stop (if any)
-	if client.reconnectC != nil {
-		close(client.reconnectC)
+	if reconnectC != nil {
+		close(reconnectC)
 	}
+	client.errMu.Lock()
 	if client.errC != nil {
 		close(client.errC)
 		client.errC = nil
 	}
+	client.errMu.Unlock()
 	// Wait for connection to actually close
 }
 
 func (client *Client) error(err error) {
 	log.Error(err)
+	client.errMu.Lock()
+	defer client.errMu.Unlock()
 	if client.errC != nil {
-		client.errC <- err
+		// Never block while holding errMu: Stop needs it to close the channel.
+		select {
+		case client.errC <- err:
+		default:
+		}
 	}
 }
 
 func (client *Client) Errors() <-chan error {
+	client.errMu.Lock()
+	defer client.errMu.Unlock()
 	if client.errC == nil {
 		client.errC = make(chan error, 1)
 	}

@@ -70,6 +70,16 @@ func TestServerErrorDoesNotBlockStop(t *testing.T) {
 	server.Stop()
 }
 
+func TestClientErrorDoesNotBlockStop(t *testing.T) {
+	client := NewClient()
+	client.SetRequestedSubProtocol("ocpp1.6")
+	_ = client.Errors() // never drained
+	for i := 0; i < 10; i++ {
+		client.error(errors.New("write failed"))
+	}
+	client.Stop()
+}
+
 // startTestServer starts a server on an OS-chosen port and returns its URL.
 // Addr() is polled through its accessor, which is what callers do.
 func startTestServer(t *testing.T) (*Server, string) {

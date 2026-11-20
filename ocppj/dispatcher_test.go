@@ -330,6 +330,19 @@ func (c *ClientDispatcherTestSuite) TestClientStopWhileSending() {
 	wg.Wait()
 }
 
+func (c *ClientDispatcherTestSuite) TestClientStopBeforeStart() {
+	c.dispatcher.Stop()
+	assert.False(c.T(), c.dispatcher.IsRunning())
+}
+
+func (c *ClientDispatcherTestSuite) TestClientStopTwice() {
+	c.dispatcher.Start()
+	require.True(c.T(), c.dispatcher.IsRunning())
+	c.dispatcher.Stop()
+	c.dispatcher.Stop()
+	require.Eventually(c.T(), func() bool { return !c.dispatcher.IsRunning() }, time.Second, time.Millisecond)
+}
+
 func (c *ClientDispatcherTestSuite) TestClientRequestCanceled() {
 	t := c.T()
 	// Setup

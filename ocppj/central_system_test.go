@@ -68,6 +68,33 @@ func (suite *OcppJTestSuite) TestServerStopBeforeStart() {
 	assert.True(t, suite.serverDispatcher.IsRunning())
 }
 
+// TestServerStopWhileClientsDisconnect runs Stop while websocket goroutines are
+// still invoking the disconnect callback. The callback joins Stop's wait group,
+// so an unsynchronised Add concurrent with Wait is reported under -race.
+func (suite *OcppJTestSuite) TestServerStopWhileClientsDisconnect() {
+	suite.mockServer.On("Start", mock.AnythingOfType("int"), mock.AnythingOfType("string")).Return(nil)
+	suite.mockServer.On("Stop").Return(nil)
+	suite.centralSystem.Start(8887, "/{ws}")
+	require.NotNil(suite.T(), suite.mockServer.DisconnectedClientHandler)
+	require.NotNil(suite.T(), suite.mockServer.NewClientHandler)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		channel := NewMockWebSocket(fmt.Sprintf("client%d", i))
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			suite.mockServer.NewClientHandler(channel)
+		}()
+		go func() {
+			defer wg.Done()
+			suite.mockServer.DisconnectedClientHandler(channel)
+		}()
+	}
+	suite.centralSystem.Stop()
+	wg.Wait()
+}
+
 // ----------------- SendRequest tests -----------------
 
 func (suite *OcppJTestSuite) TestCentralSystemSendRequest() {

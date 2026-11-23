@@ -26,6 +26,25 @@ type Server struct {
 	RequestState              ServerState
 	waitGroup                 sync.WaitGroup
 	stopped                   chan struct{}
+	// stopMu orders waitGroup.Add against Stop's Wait: sync.WaitGroup requires an
+	// Add with a zero counter to happen before Wait, which the connect and
+	// disconnect callbacks (run by the websocket goroutines) can't guarantee alone.
+	stopMu sync.Mutex
+}
+
+// enter registers an in-flight connect/disconnect callback with the wait group.
+// It reports false when Stop has already begun, in which case the caller must
+// not touch the wait group.
+func (s *Server) enter() bool {
+	s.stopMu.Lock()
+	defer s.stopMu.Unlock()
+	select {
+	case <-s.stopped:
+		return false
+	default:
+	}
+	s.waitGroup.Add(1)
+	return true
 }
 
 type ClientHandler func(client ws.Channel)
@@ -149,11 +168,13 @@ func (s *Server) Start(listenPort int, listenPath string) {
 // Stops the server.
 // This clears all pending requests and causes the Start function to return.
 func (s *Server) Stop() {
+	s.stopMu.Lock()
 	select {
 	case <-s.stopped:
 	default:
 		close(s.stopped)
 	}
+	s.stopMu.Unlock()
 	s.waitGroup.Wait()
 	s.server.Stop()
 	s.dispatcher.Stop()
@@ -335,8 +356,9 @@ func (s *Server) HandleFailedResponseError(clientID string, requestID string, er
 }
 
 func (s *Server) onClientConnected(ws ws.Channel) {
-	s.waitGroup.Add(1)
-	defer s.waitGroup.Done()
+	if s.enter() {
+		defer s.waitGroup.Done()
+	}
 	select {
 	case <-s.stopped:
 	default:
@@ -350,8 +372,9 @@ func (s *Server) onClientConnected(ws ws.Channel) {
 }
 
 func (s *Server) onClientDisconnected(ws ws.Channel) {
-	s.waitGroup.Add(1)
-	defer s.waitGroup.Done()
+	if s.enter() {
+		defer s.waitGroup.Done()
+	}
 	select {
 	case <-s.stopped:
 	default:

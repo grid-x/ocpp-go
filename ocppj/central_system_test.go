@@ -68,6 +68,33 @@ func (suite *OcppJTestSuite) TestServerStopBeforeStart() {
 	assert.True(t, suite.serverDispatcher.IsRunning())
 }
 
+// TestServerStopWhileClientsDisconnect runs Stop while websocket goroutines are
+// still invoking the disconnect callback. The callback joins Stop's wait group,
+// so an unsynchronised Add concurrent with Wait is reported under -race.
+func (suite *OcppJTestSuite) TestServerStopWhileClientsDisconnect() {
+	suite.mockServer.On("Start", mock.AnythingOfType("int"), mock.AnythingOfType("string")).Return(nil)
+	suite.mockServer.On("Stop").Return(nil)
+	suite.centralSystem.Start(8887, "/{ws}")
+	require.NotNil(suite.T(), suite.mockServer.DisconnectedClientHandler)
+	require.NotNil(suite.T(), suite.mockServer.NewClientHandler)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		channel := NewMockWebSocket(fmt.Sprintf("client%d", i))
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			suite.mockServer.NewClientHandler(channel)
+		}()
+		go func() {
+			defer wg.Done()
+			suite.mockServer.DisconnectedClientHandler(channel)
+		}()
+	}
+	suite.centralSystem.Stop()
+	wg.Wait()
+}
+
 // ----------------- SendRequest tests -----------------
 
 func (suite *OcppJTestSuite) TestCentralSystemSendRequest() {
@@ -131,10 +158,11 @@ func (suite *OcppJTestSuite) TestCentralSystemInvalidMessageHook() {
 	serializedPayload, err := json.Marshal(mockPayload)
 	require.NoError(t, err)
 	invalidMessage := fmt.Sprintf("[2,\"%v\",\"%s\",%v]", mockID, MockFeatureName, string(serializedPayload))
-	expectedError := fmt.Sprintf("[4,\"%v\",\"%v\",\"%v\",{}]", mockID, ocppj.FormationViolation, "json: cannot unmarshal number into Go struct field MockRequest.mockValue of type string")
+	// Go >= 1.27 omits the struct name in encoding/json errors, so match loosely
+	expectedErrorPattern := fmt.Sprintf(`^\[4,"%v","%v","json: cannot unmarshal number into Go struct field .*mockValue of type string",\{\}\]$`, mockID, ocppj.FormationViolation)
 	writeHook := suite.mockServer.On("Write", mockChargePointId, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
 		data := args.Get(1).([]byte)
-		assert.Equal(t, expectedError, string(data))
+		assert.Regexp(t, expectedErrorPattern, string(data))
 	})
 	suite.mockServer.On("Start", mock.AnythingOfType("int"), mock.AnythingOfType("string")).Return(nil)
 	// Setup hook 1
@@ -155,7 +183,7 @@ func (suite *OcppJTestSuite) TestCentralSystemInvalidMessageHook() {
 	assert.Equal(t, ocppj.FormationViolation, ocppErr.Code)
 	// Setup hook 2
 	mockError := ocpp.NewError(ocppj.InternalError, "custom error", mockID)
-	expectedError = fmt.Sprintf("[4,\"%v\",\"%v\",\"%v\",{}]", mockError.MessageId, mockError.Code, mockError.Description)
+	expectedError := fmt.Sprintf("[4,\"%v\",\"%v\",\"%v\",{}]", mockError.MessageId, mockError.Code, mockError.Description)
 	writeHook.Run(func(args mock.Arguments) {
 		data := args.Get(1).([]byte)
 		assert.Equal(t, expectedError, string(data))

@@ -1,7 +1,7 @@
 package ocppj_test
 
 import (
-	"fmt"
+	"errors"
 	"sync"
 	"time"
 
@@ -95,7 +95,7 @@ func (s *ServerDispatcherTestSuite) TestServerRequestCanceled() {
 		id, _ := args.Get(0).(string)
 		assert.Equal(t, clientID, id)
 		<-writeC
-	}).Return(fmt.Errorf(errMsg))
+	}).Return(errors.New(errMsg))
 	// Create mock request
 	req := newMockRequest("somevalue")
 	call, err := s.endpoint.CreateCall(req)
@@ -285,6 +285,64 @@ func (c *ClientDispatcherTestSuite) TestClientSendRequest() {
 
 }
 
+// TestClientStopWhileSending checks the dispatcher's running state is safe to
+// query and use while the message pump shuts down: the pump clears the request
+// channel on stop, which IsRunning and SendRequest read concurrently.
+func (c *ClientDispatcherTestSuite) TestClientStopWhileSending() {
+	t := c.T()
+	c.websocketClient.On("Write", mock.Anything).Return(nil)
+	c.dispatcher.Start()
+	require.True(t, c.dispatcher.IsRunning())
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				if !c.dispatcher.IsRunning() {
+					return
+				}
+				call, err := c.endpoint.CreateCall(newMockRequest("somevalue"))
+				if err != nil {
+					return
+				}
+				data, err := call.MarshalJSON()
+				if err != nil {
+					return
+				}
+				// The dispatcher may stop at any point; only the race matters here.
+				_ = c.dispatcher.SendRequest(ocppj.RequestBundle{Call: call, Data: data})
+			}
+		}()
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	c.dispatcher.Stop()
+	require.Eventually(t, func() bool { return !c.dispatcher.IsRunning() }, time.Second, time.Millisecond)
+	close(done)
+	wg.Wait()
+}
+
+func (c *ClientDispatcherTestSuite) TestClientStopBeforeStart() {
+	c.dispatcher.Stop()
+	assert.False(c.T(), c.dispatcher.IsRunning())
+}
+
+func (c *ClientDispatcherTestSuite) TestClientStopTwice() {
+	c.dispatcher.Start()
+	require.True(c.T(), c.dispatcher.IsRunning())
+	c.dispatcher.Stop()
+	c.dispatcher.Stop()
+	require.Eventually(c.T(), func() bool { return !c.dispatcher.IsRunning() }, time.Second, time.Millisecond)
+}
+
 func (c *ClientDispatcherTestSuite) TestClientRequestCanceled() {
 	t := c.T()
 	// Setup
@@ -293,7 +351,7 @@ func (c *ClientDispatcherTestSuite) TestClientRequestCanceled() {
 	errMsg := "mockError"
 	c.websocketClient.On("Write", mock.Anything).Run(func(args mock.Arguments) {
 		<-writeC
-	}).Return(fmt.Errorf(errMsg))
+	}).Return(errors.New(errMsg))
 	// Create mock request
 	req := newMockRequest("somevalue")
 	call, err := c.endpoint.CreateCall(req)
